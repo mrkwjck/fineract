@@ -1,83 +1,112 @@
-# Moduł: fineract-provider
+# Moduł Główny i Struktury Organizacyjnej (fineract-provider)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-provider` jest głównym modułem aplikacyjnym Apache Fineract i stanowi centralną bramę API (Application Programming Interface) dla całego systemu. Jego fundamentalną rolą jest agregowanie funkcjonalności dostarczanych przez pozostałe moduły biznesowe Fineract i udostępnianie ich na zewnątrz poprzez zestaw interfejsów RESTful API. Działa jako punkt integracji dla interfejsów użytkownika (UI), aplikacji mobilnych oraz innych systemów zewnętrznych, umożliwiając im interakcję z podstawowymi usługami bankowości centralnej. Jest to również moduł startowy aplikacji Spring Boot, zawierający główną klasę `ServerApplication.java`.
+## Opis
+Moduł `fineract-provider` stanowi monolityczne serce (Core Engine) całego systemu Apache Fineract. To w nim znajduje się punkt startowy aplikacji Spring Boot (`ServerApplication.java`) oraz główna konfiguracja scalająca wszystkie pozostałe, odseparowane moduły (takie jak pożyczki, oszczędności, księgowość). 
 
-## Kluczowe komponenty
+Biznesowo, `fineract-provider` przechowuje fundamenty działania każdej instytucji finansowej, definiując jej **strukturę organizacyjną, personel oraz grupy wsparcia (Microfinance)**. Bez poprawnego skonfigurowania encji w tym module, system nie pozwoli na utworzenie ani jednego klienta, pożyczki czy wpisu księgowego. Zarządza on również konfiguracją systemu (Global Properties), powiadomieniami oraz kalendarzami dni roboczych/wolnych (Holidays, Working Days).
 
-`fineract-provider` jako moduł agregujący, zawiera wiele podpakietów, które odzwierciedlają udostępniane przez niego funkcjonalności, często będące fasadami dla usług z innych modułów:
+## Kluczowe komponenty biznesowe
 
-*   **org.apache.fineract.accounting**: Zawiera API REST i serwisy fasadowe do zarządzania operacjami księgowymi, delegując rzeczywistą logikę do modułu `fineract-accounting`.
-*   **org.apache.fineract.adhocquery**: Udostępnia API do wykonywania ad-hoc zapytań do danych.
-*   **org.apache.fineract.batch**: API do zarządzania i monitorowania procesów wsadowych.
-*   **org.apache.fineract.cob**: Interfejsy do zarządzania i wyzwalania procesów `Close of Business`.
-*   **org.apache.fineract.commands**: Fasady do wysyłania i zarządzania komendami, które są następnie przetwarzane przez moduł `fineract-command`.
-*   **org.apache.fineract.infrastructure**: Zawiera interfejsy API i serwisy dla podstawowych funkcji infrastrukturalnych, takich jak zarządzanie konfiguracją, buforowaniem, dokumentami czy zadaniami, korzystając z funkcjonalności `fineract-core`.
-*   **org.apache.fineract.interoperation**: API wspierające interoperacyjność z innymi systemami.
-*   **org.apache.fineract.notification**: API do zarządzania powiadomieniami.
-*   **org.apache.fineract.organisation**: API do zarządzania strukturą organizacyjną (np. oddziały, kasjerzy).
-*   **org.apache.fineract.portfolio**: Agreguje API i serwisy dla kluczowych produktów finansowych, takich jak pożyczki (`fineract-loan`), oszczędności (`fineract-savings`), zarządzanie klientami i grupami. Jest to jeden z najbardziej rozbudowanych obszarów.
-*   **org.apache.fineract.spm**: API dla Strategic Performance Management.
-*   **org.apache.fineract.template**: API do zarządzania szablonami (np. dla dokumentów, raportów).
-*   **org.apache.fineract.useradministration**: API do zarządzania użytkownikami i ich uprawnieniami, integrujące się z `fineract-security`.
-*   `ServerApplication.java`: Główna klasa aplikacji Spring Boot, odpowiedzialna za uruchomienie serwera i konfigurację kontekstu aplikacji.
+| Komponent / Domena | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **`Office`** (`organisation/office`) | Oddziały i biura. Reprezentują fizyczną lub logiczną strukturę placówek banku. Mają strukturę drzewiastą (np. Centrala -> Oddział Regionalny -> Placówka lokalna). Wpływają na Data Scoping (pracownik widzi tylko klientów swojego biura). |
+| **`Staff`** (`organisation/staff`) | Personel banku/MFI (np. Analitycy, Oficerowie Kredytowi, Menedżerowie). Klient oraz Pożyczka w Fineract mogą (lub muszą) być przypisani do konkretnego oficera kredytowego z tej tabeli, odpowiedzialnego za jego nadzór. |
+| **`Teller`** (`organisation/teller`) | Kasjerzy i zarządzenie Gotówką (Cash Management). Pozwala przypisać konkretnego pracownika (`Staff`) do Stanowiska Kasowego (`Teller`) na zadany okres czasu (Shift). Kasjerzy mają przypisane własne konta GL podpięte pod system księgowości. |
+| **`Group` i `Center`** (`portfolio/group`) | Podstawa mikrofinansowania (Microfinance). Grupy solidarnościowe (Joint-Liability Groups). Jeśli klient A (będący w grupie) nie spłaca pożyczki, cała grupa traci wiarygodność. Obejmuje zbiorcze spotkania (Meetings) i zbiorcze zatwierdzanie wpłat. |
+| **`UserAdministration`** | Zarządzanie loginami do systemu (`m_appuser`). Ścisła integracja z profilem `Staff` oraz rolami i uprawnieniami (wykorzystywanymi z kolei przez `fineract-security`). |
+| **`GlobalConfiguration`** | Tabela globalnych parametrów włączających/wyłączających funkcje całego systemu w locie (np. wymuszanie weryfikacji haseł, włączanie modułu Maker-Checker, domyślna waluta). |
 
-## Przepływ danych
+## Architektura modułu
 
-Przepływ danych w `fineract-provider` rozpoczyna się od zewnętrznego żądania HTTP, które jest następnie walidowane, autoryzowane i kierowane do odpowiedniego serwisu, często uruchamiającego komendę, która jest przetwarzana przez inne moduły.
-
-### Uproszczony przepływ danych dla żądania REST API (np. utworzenie nowego klienta):
+Architektura jest wciąż oparta na warstwach (Controllers -> Services -> Repositories), gdzie `fineract-provider` ładuje i rejestruje (Auto-Configuration) wszystkie pozostałe pakiety.
 
 ```plantuml
 @startuml
-participant "Klient (UI/System Zew.)" as Client
-participant "Kontroler REST (fineract-provider)" as RestController
-participant "Serwis Fasadowy (fineract-provider)" as FacadeService
-participant "CommandGateway (fineract-command)" as CommandGateway
-participant "CommandHandler (inny moduł)" as CommandHandler
-participant "Serwis Biznesowy (inny moduł)" as BusinessService
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Zależności modułu fineract-provider (Core)
 
-Client -> RestController: Żądanie POST /clients (JSON z danymi klienta)
-RestController -> RestController: Walidacja danych wejściowych (fineract-validation)
-RestController -> FacadeService: Przekazuje DTO z danymi klienta
-FacadeService -> CommandGateway: Wysyła komendę (np. CreateClientCommand)
-CommandGateway -> CommandHandler: Kieruje komendę do odpowiedniego Handlera
-CommandHandler -> BusinessService: Wywołuje logikę tworzenia klienta
-BusinessService -> Database: Zapisuje nowego klienta
-Database --> BusinessService: Potwierdzenie zapisu
-BusinessService --> CommandHandler: Potwierdzenie operacji
-CommandHandler --> CommandGateway: Wynik wykonania komendy
-CommandGateway --> FacadeService: Wynik wykonania komendy
-FacadeService --> RestController: Wynik operacji
-RestController --> Client: Odpowiedź HTTP 201 Created (z ID klienta)
+Component(provider_core, "Fineract Provider (ServerApplication)", "Spring Boot App", "Wczytuje kontekst, pule wątków (Tomcat), konfiguruje źródła danych (DataSource) i ładuje Beans z innych modułów")
+Component(org_domain, "Domena Organizacji", "Serwisy (Office, Staff, Teller)", "Utrzymuje hierarchie oddziałów, dni wolne banku i zarządzanie personelem")
+Component(mfi_domain, "Domena MFI (Group/Center)", "Serwisy (Grupy)", "Utrzymuje relacje miedzy klientami na potrzeby JLG (Joint-Liability)")
+
+System_Ext(loans, "fineract-loan", "Moduł pożyczek")
+System_Ext(savings, "fineract-savings", "Moduł oszczędności")
+System_Ext(accounting, "fineract-accounting", "Moduł księgowości")
+SystemDb_Ext(db, "Relational Database", "Model tenanta")
+
+Rel(provider_core, loans, "Inicjuje (ComponentScan, Dependencje)")
+Rel(provider_core, savings, "Inicjuje (ComponentScan, Dependencje)")
+Rel(provider_core, accounting, "Inicjuje (ComponentScan, Dependencje)")
+
+Rel(loans, org_domain, "Odpytuje: 'Czy Staff ID=X istnieje i jest aktywny?'")
+Rel(savings, org_domain, "Zapisuje transakcje kasjera powiązane z oddziałem (Office ID=Y)")
+Rel(loans, db, "Sprawdzenie świąt z tabel (m_holiday) przy harmonogramach")
+
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Przepływ danych (Utworzenie Hierarchii Organizacyjnej)
 
-`fineract-provider` ma zależności od praktycznie wszystkich innych modułów biznesowych w ekosystemie Fineract. Działa jako warstwa prezentacji i orkiestracji, integrując i udostępniając ich funkcjonalności:
+Diagram obrazuje prosty, acz kluczowy przepływ – konfigurację nowej placówki i zatrudnienie oficera. Bez tych kroków założenie Klienta i uruchomienie kredytu będzie niemożliwe.
 
-*   **fineract-core**: Wykorzystuje globalne usługi, narzędzia i konfiguracje.
-*   **fineract-security**: Integruje mechanizmy uwierzytelniania i autoryzacji do ochrony punktów końcowych API.
-*   **fineract-validation**: Służy do walidacji danych wejściowych w żądaniach REST.
-*   **fineract-command**: Jest kluczowym konsumentem, wysyłając obiekty komend w celu wykonania operacji biznesowych.
-*   **fineract-loan, fineract-savings, fineract-accounting** itd.: `fineract-provider` zawiera fasady lub kontrolery, które bezpośrednio lub pośrednio wywołują serwisy tych modułów w celu realizacji żądań API.
+```plantuml
+@startuml
+title Sekwencja - Inicjalizacja Placówki i Pracownika (Setup)
 
-## Zależności zewnętrzne i integracje
+actor Administrator as admin
+participant "OfficesApi" as office_api
+participant "OfficeWriteService" as office_svc
+participant "StaffApi" as staff_api
+participant "StaffWriteService" as staff_svc
+participant "Baza Danych" as db
 
-*   **Spring Boot**: Cała aplikacja jest zbudowana na frameworku Spring Boot, który dostarcza środowisko do szybkiego tworzenia samodzielnych, produkcyjnych aplikacji.
-*   **Serwer Aplikacji (Embedded Tomcat/Jetty)**: `fineract-provider` zawiera wbudowany serwer aplikacji, który obsługuje żądania HTTP.
-*   **JSON/HTTP**: Główne protokoły komunikacji z zewnętrznymi klientami.
-*   **Baza Danych**: Chociaż `fineract-provider` sam nie zawiera logiki biznesowej do bezpośredniego zarządzania danymi (delegując to do innych modułów), jest on ostatecznym punktem, przez który dane są odczytywane i modyfikowane w bazie danych, dzięki integracji z innymi modułami.
+admin -> office_api: POST /offices (Name: Oddział Warszawa, ParentId: 1/Centrala)
+activate office_api
+office_api -> office_svc: createOffice()
+activate office_svc
 
-## Zarządzanie stanem i baza Danych
+office_svc -> db: Weryfikacja węzła rodzica (Parent) i wyliczenie nowej hierarchii (Hierarchy String)
+office_svc -> db: Zapis do m_office
+office_svc --> office_api: Office ID (np. 2)
+deactivate office_svc
+office_api --> admin: 200 OK
+deactivate office_api
 
-`fineract-provider` nie zarządza bezpośrednio trwałym stanem biznesowym systemu. Jego rola polega na **orkiestrowaniu** operacji, które zmieniają stan systemu. Kiedy żądanie przychodzi do `fineract-provider`, jest ono przekształcane w komendę lub wywołanie serwisu, które są następnie przekazywane do odpowiednich modułów biznesowych (np. `fineract-loan`, `fineract-savings`). Te moduły są odpowiedzialne za rzeczywiste zarządzanie stanem i persystencję danych w bazie danych.
+admin -> staff_api: POST /staff (Name: Jan Kowalski, OfficeId: 2, IsLoanOfficer: true)
+activate staff_api
+staff_api -> staff_svc: createStaff()
+activate staff_svc
 
-`fineract-provider` udostępnia jednak API, które pozwala na:
-*   Odczytywanie aktualnego stanu obiektów biznesowych (np. lista klientów, szczegóły pożyczki).
-*   Wprowadzanie zmian w stanie systemu poprzez wysyłanie komend.
+staff_svc -> db: Weryfikacja czy Oddział (ID=2) istnieje
+staff_svc -> db: Zapis do m_staff
+staff_svc --> staff_api: Staff ID (np. 5)
+deactivate staff_svc
+staff_api --> admin: 200 OK
+deactivate staff_api
 
-W ten sposób, moduł ten działa jako fasada, która synchronizuje widok klienta z aktualnym stanem bazy danych, ale sama nie jest odpowiedzialna za niskopoziomowe operacje na danych.
+note right of admin
+Od teraz Jan Kowalski może być
+wybierany jako Officer przypisany
+do pożyczek udzielanych w Warszawie.
+end note
+
+@enduml
+```
+
+## Zależności wewnętrzne i Integracje
+
+*   **Fundament Aplikacji**: Z punktu widzenia budowania (Build) w systemie (np. `build.gradle`), `fineract-provider` to moduł zbierający (Aggregation Module). Definiuje zależność (`implementation project(':fineract-loan')`, itd.) do wszystkich kluczowych pod-modułów i odpowiada za ostateczne spakowanie ich do działającego pliku `.jar` lub instalacji kontenerowej w locie.
+*   **Wpływ na harmonogramy rat (`fineract-loan`)**: Domena `organisation/holiday` ściśle integruje się z logiką generowania harmonogramów pożyczek (Loan Schedules). Silnik harmonogramów (w `fineract-loan`) pyta serwisy kalendarzowe (w `fineract-provider`) o `WorkingDays` i `Holidays` (Święta Bankowe), aby zdecydować, czy rata wypadająca w niedzielę ma być pobrana w piątek, czy przeniesiona na poniedziałek (Repayment Rescheduling).
+
+## Zarządzanie stanem i baza danych
+
+Najistotniejsze słowniki konfiguracji początkowej i strukturalnej bazy danych to m.in.:
+
+*   `m_office`: Definicja i struktura biur. Kluczowa z racji hierarchii (`hierarchy` pole określające np. ".1.2." co ułatwia szukanie "wszystkich pod-oddziałów zapytań SQL typu LIKE").
+*   `m_staff`: Osobowa lista pracowników (Mogą być `is_loan_officer = 1`, by byli wybieralni przy wnioskach kredytowych).
+*   `m_group` / `m_group_client`: Centra mikrofinansowania i struktura asocjacji (Klient A znajduje się w Grupie B).
+*   `m_holiday` i `m_working_days`: Kalendarz operacyjny banku. Daty wykluczone z księgowania i pobierania rat.
+*   `m_currency`: Zdefiniowane i aktywowane dla danej instalacji/dzierżawcy waluty.
+*   `c_configuration`: Tabela typu `name-value`, pozwalająca zarządzać flagami takimi jak `maker-checker-enabled`, `password-policy-regex`, `min-password-length`. Umożliwia administratorowi szybkie zablokowanie konkretnych zachowań systemu bez restartu.

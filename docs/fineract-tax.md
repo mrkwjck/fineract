@@ -1,85 +1,90 @@
-# Moduł: fineract-tax
+# Moduł Podatkowy (fineract-tax)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-tax` w Apache Fineract jest odpowiedzialny za definiowanie, obliczanie i aplikowanie różnych rodzajów podatków związanych z transakcjami finansowymi i produktami bankowymi. Zapewnia elastyczne mechanizmy konfiguracji reguł podatkowych, ich automatyczne stosowanie w odpowiednich momentach cyklu życia produktu oraz prawidłowe księgowanie naliczonych podatków. Jego głównym celem jest zapewnienie zgodności z lokalnymi przepisami podatkowymi oraz precyzyjne śledzenie i raportowanie zobowiązań podatkowych.
+## Opis
+Moduł `fineract-tax` stanowi zaawansowany silnik nakładania podatków oraz odpisów pobieranych u źródła na rzecz agencji rządowych, stworzony dla wymogów compliance instytucji finansowych i MFI działających na globalnych rynkach. Regulacje prawne mogą wymagać odprowadzenia np. VAT-u (Value Added Tax) na pobrane przez bank prowizje kredytowe, lub odprowadzenia podatku od zysków kapitałowych tzw. Podatku U Źródła (Withholding Tax) na wygenerowanych odsetkach od oszczędności klientów.
+
+System wspiera kaskadowanie komponentów podatkowych oraz wyznaczanie ich do konkretnych kont księgowych (na konto zobowiązań podatkowych "Tax Liability"). 
 
 ## Kluczowe komponenty
 
-Moduł `fineract-tax` jest zorganizowany wokół pakietu `org.apache.fineract.portfolio.tax`, który zawiera następujące podpakietu:
+| Komponent | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **`TaxComponent`** (Składnik Podatkowy) | Najbardziej podstawowy element (np. "VAT Podstawowy" - 23% z kontem księgowym docelowym X, albo "Podatek Lokalny" - 2% z kontem księgowym Y). Posiada zakresy dat obowiązywania (możliwość płynnej zmiany po nowym roku bez łamania historii). |
+| **`TaxGroup`** (Grupa Podatkowa) | Wiele składowych może zostać połączonych w jedną Grupę, którą można przypisać m.in. na produkcie pożyczki, bądź na opłacie wejściowej (`Charge`). Podatki wewnątrz grupy nakładane są po kolei na daną kwotę u klienta. |
+| **Integracja z Wypłatą Zysków (Withholding)** | Logika wywoływana w kodzie depozytów (Savings) podczas kapitalizacji odsetek (Posting Interest). Wyliczone dla klienta 100 PLN odsetek zostaje automatycznie rozbite np. na 81 PLN wpływające na saldo, i 19 PLN odprowadzane w podatku na osobne konto księgowe banku (by bank w imieniu klienta zapłacił podatek państwu). |
 
-*   **org.apache.fineract.portfolio.tax.api**: Zawiera kontrolery REST lub interfejsy API do interakcji z modułem, umożliwiając tworzenie, aktualizowanie, usuwanie definicji podatków i ich grup.
-*   **org.apache.fineract.portfolio.tax.domain**: Zawiera encje domenowe, takie jak `TaxGroup` (grupy podatkowe), `TaxComponent` (poszczególne składniki podatku, np. stawka VAT) oraz `TaxGroupMappings` (mapowanie komponentów do grup). Logika biznesowa do zarządzania tymi encjami znajduje się również tutaj.
-*   **org.apache.fineract.portfolio.tax.exception**: Niestandardowe wyjątki obsługujące błędy specyficzne dla zarządzania podatkami.
-*   **org.apache.fineract.portfolio.tax.handler**: Implementacje `CommandHandler`ów, które przetwarzają komendy związane z podatkami (np. `CreateTaxGroupCommand`, `UpdateTaxComponentCommand`).
-*   **org.apache.fineract.portfolio.tax.mapper**: Klasy odpowiedzialne za mapowanie obiektów pomiędzy warstwami (np. DTO na encje domenowe) dla danych podatkowych.
-*   **org.apache.fineract.portfolio.tax.serialization**: Obsługa serializacji i deserializacji danych podatkowych.
-*   **org.apache.fineract.portfolio.tax.service**: Serwisy biznesowe implementujące główną logikę zarządzania podatkami, w tym definiowanie, obliczanie i aplikowanie podatków na produkty finansowe i transakcje.
+## Architektura modułu
 
-## Przepływ danych
-
-Przepływ danych w module `fineract-tax` obejmuje definiowanie reguł podatkowych, a następnie ich aplikowanie podczas wykonywania transakcji finansowych.
-
-### Uproszczony przepływ definiowania reguły podatkowej i jej zastosowania:
+Architektura jest analogiczna do modułu z prowizjami (Charges) – jest to słownik współdzielony między modułami operacyjnymi i wymuszający odpowiednie księgowania.
 
 ```plantuml
 @startuml
-participant "Administrator (UI/API)" as Admin
-participant "Kontroler REST (fineract-provider/tax)" as TaxController
-participant "CommandHandler (tax.handler)" as TaxCommandHandler
-participant "TaxService (tax.service)" as TaxService
-participant "TaxGroup/TaxComponent (domain)" as TaxEntities
-participant "Moduł Biznesowy (np. fineract-loan)" as BusinessModule
-participant "AccountingService (fineract-accounting)" as AccountingService
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Zależności modułu fineract-tax
 
-Admin -> TaxController: Żądanie utworzenia nowej grupy podatkowej z komponentami (POST /tax/groups)
-TaxController -> TaxCommandHandler: Wysyła CreateTaxGroupCommand
-TaxCommandHandler -> TaxService: Wywołuje logikę tworzenia
-TaxService -> TaxEntities: Tworzy encje TaxGroup i TaxComponent
-TaxEntities -> Database: Zapisz definicje podatków
-Database --> TaxEntities: Potwierdzenie zapisu
-TaxEntities --> TaxService: Potwierdzenie
-TaxService --> TaxCommandHandler: Wynik operacji
-TaxCommandHandler --> TaxController: Wynik operacji
-TaxController --> Admin: Odpowiedź HTTP 201 (z ID grupy podatkowej)
+Component(tax_api, "Tax REST API", "Spring Web", "Zarządzanie składowymi oraz grupami podatkowymi (/taxes/components, /taxes/group)")
+Component(tax_service, "TaxPlatformService", "Serwis domenowy", "Rejestruje definicje, asocjacje z kontami GL i kontroluje daty ważności (Valid From)")
+Component(charge_module, "fineract-charge", "Moduł Opłat", "Zawiera klucz TaxGroup, by ustalić czy opłata jest opodatkowana")
+Component(savings_module, "fineract-savings", "Moduł Oszczędności", "Przelicza wygenerowane odsetki w oparciu o przypisaną TaxGroup")
+Component(accounting_module, "fineract-accounting", "Księgowość", "Generuje wpisy do Liability Account (Rozrachunki z Fiskusem)")
 
-BusinessModule -> TaxService: Prośba o obliczenie podatku dla transakcji (np. wypłata, naliczenie odsetek)
-TaxService -> TaxEntities: Pobierz odpowiednie reguły podatkowe (np. na podstawie produktu, daty)
-TaxEntities -> Database: Zapytanie o reguły podatkowe
-Database --> TaxEntities: Definicje podatków
-TaxEntities --> TaxService: Definicje podatków
-TaxService -> TaxService: Oblicz należny podatek
-TaxService --> BusinessModule: Zwróć kwotę podatku
-BusinessModule -> AccountingService: Zaksięguj transakcję z uwzględnieniem podatku
-AccountingService -> Database: Zapis transakcji księgowej
-Database --> AccountingService: Potwierdzenie
-AccountingService --> BusinessModule: Potwierdzenie
-BusinessModule -> BusinessModule: Kontynuuj operację biznesową
+SystemDb_Ext(db, "Baza Tenanta", "MySQL / PostgreSQL")
+
+Rel(tax_api, tax_service, "Tworzy komponenty VAT 23%")
+Rel(charge_module, tax_service, "Pobiera reguły dla przypisanej grupy na Oplacie Zalozycielskiej")
+Rel(savings_module, tax_service, "Pobiera reguły dla podatku 'Belki' od oszczędności 19%")
+Rel(tax_service, db, "m_tax_component, m_tax_group")
+Rel(tax_service, accounting_module, "Zwraca powiązane ID kont GL, żeby zaksięgować VAT")
+
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Przepływ danych (Księgowanie Podatku Belki)
 
-Moduł `fineract-tax` jest modułem wspierającym, który jest wykorzystywany przez główne moduły biznesowe Fineract:
+```plantuml
+@startuml
+title Sekwencja - Wyliczenie i pobranie podatku od zysków (Withholding Tax) na koncie
 
-*   **fineract-core**: Wykorzystuje ogólne komponenty infrastrukturalne i narzędzia.
-*   **fineract-command**: Komendy do operacji na podatkach są przetwarzane przez ogólny mechanizm komend Fineract.
-*   **fineract-provider**: Udostępnia punkty końcowe API, które wywołują funkcjonalności modułu `fineract-tax`.
-*   **fineract-loan, fineract-savings, fineract-charge**: Te moduły biznesowe odwołują się do `fineract-tax` w celu obliczania i aplikowania podatków związanych z pożyczkami, kontami oszczędnościowymi i opłatami.
-*   **fineract-accounting**: Każdy naliczony podatek musi zostać odpowiednio zaksięgowany, dlatego `fineract-tax` integruje się z modułem księgowości.
+participant "SavingsDomainService" as savings
+participant "TaxGroup" as tax_group
+participant "TaxComponent" as tax_comp
+participant "Konto (SavingsAccount)" as account
+participant "Accounting / Księgowość" as acc
 
-## Zależności zewnętrzne i integracje
+savings -> account: Wymuś kapitalizację wyliczonych odsetek = 1000 PLN (Gross)
+activate account
+account -> tax_group: Czy ten produkt posiada Grupę Podatku Withholding?
+activate tax_group
+tax_group -> tax_comp: Wylicz z 1000 PLN podatek wg stawki 19%
+tax_comp --> tax_group: 190 PLN (Podatku)
+tax_group --> account: Netto: 810 PLN, Podatek: 190 PLN
+deactivate tax_group
 
-*   **Baza Danych**: Główna zależność. Wszystkie definicje reguł podatkowych, ich komponenty, grupy i rekordy naliczonych podatków są trwale przechowywane w relacyjnej bazie danych.
-*   **Spring Framework**: Wykorzystuje mechanizmy Spring do zarządzania transakcjami, wstrzykiwania zależności i konfiguracji.
+account -> account: Dolicz do salda (Running Balance) klienta jedynie 810 PLN
+account --> savings: Transakcja zatwierdzona z rozbiciem podatkowym (Tax Details = 190 PLN)
+deactivate account
 
-## Zarządzanie stanem i baza Danych
+savings -> acc: Żądanie Księgowania (Business Event)
+activate acc
+acc -> acc: Winien Koszty Odsetkowe Banku: 1000 PLN
+acc -> acc: Ma Zobowiązania Podatkowe (US): 190 PLN
+acc -> acc: Ma Zobowiązania Klienckie (Saldo Klienta): 810 PLN
+deactivate acc
+@enduml
+```
 
-Moduł `fineract-tax` zarządza stanem definicji podatków i ich aplikacją w bazie danych:
+## Zależności wewnętrzne i Integracje
 
-*   **Definicje Podatków (Tax Groups/Components)**: Przechowuje szczegółowe informacje o każdym typie podatku (np. nazwa, stawka, sposób naliczania, zakres dat obowiązywania).
-*   **Zastosowane Podatki**: Rejestruje każdy podatek, który został naliczony w ramach transakcji, w tym jego kwotę, datę naliczenia i powiązaną transakcję.
-*   **Konfiguracja Podatków dla Produktów**: Mapowania, które określają, które reguły podatkowe są domyślnie aplikowane do jakich produktów finansowych.
+*   **`fineract-accounting` (Księgowość)**: Ten moduł jest całkowicie, na twardo powiązany z modułem księgowym. Składnik podatkowy nie istnieje sam z siebie, jest jedynie logicznym procentem pobierającym środki w celu przetransportowania ich bezpośrednio na wylistowane konto Księgi Głównej (Liability Account). 
+*   **Wielokrotne opodatkowanie**: Fineract pozwala grupie podatkowej na składanie odliczeń kaskadowo - tzn. czy drugi podatek odciągany jest od kwoty pierwotnej (brutto) czy po potrąceniu pierwszego podatku.
 
-Wszystkie te dane są modelowane jako encje JPA i trwale przechowywane w bazie danych, zapewniając spójność, audytowalność i zgodność z przepisami podatkowymi.
+## Zarządzanie stanem i baza danych
+
+Kluczowe słowniki w bazie dla tego pakietu:
+
+*   `m_tax_component`: Typ i wartość procentowa podatku. Definiuje od kiedy obowiązuje (start_date) i posiada bezpośredni dowiązany klucz obcy do `acc_gl_account` (`credit_account_id`).
+*   `m_tax_group`: Nazwa zbiorczej grupy nakładanej na inne byty w systemie.
+*   `m_tax_group_mappings`: Tabela asocjacyjna. Mapuje składniki (`tax_component_id`) do grupy (`tax_group_id`).
+*   `m_savings_account_transaction_tax_details`: Tabela operacyjna podpięta pod transakcje na rachunkach oszczędnościowych, udowadniająca audytorom skarbowym, ile i jakiego podatku konkretnie ściągnięto na danej operacji kapitalizacyjnej.

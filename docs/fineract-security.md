@@ -1,89 +1,108 @@
-# Moduł: fineract-security
+# Moduł Bezpieczeństwa i Wielodzierżawności (fineract-security)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-security` jest odpowiedzialny za zarządzanie wszystkimi aspektami bezpieczeństwa w systemie Apache Fineract, w tym uwierzytelnianiem (autentykacją) i autoryzacją użytkowników. Zapewnia mechanizmy kontroli dostępu, zarządzanie rolami i uprawnieniami, a także mechanizmy ochrony przed typowymi zagrożeniami bezpieczeństwa. Jest to kluczowy moduł, który gwarantuje, że tylko autoryzowani użytkownicy mają dostęp do odpowiednich zasobów i funkcji systemu.
+## Opis
+Moduł `fineract-security` jest krytycznym komponentem infrastrukturalnym systemu Apache Fineract, odpowiadającym za zarządzanie autoryzacją (Authorization), uwierzytelnianiem (Authentication) oraz architekturą wielodzierżawną (Multi-Tenancy). 
+
+Fineract to rozwiązanie typu SaaS (Software as a Service), z którego korzystać może wiele instytucji finansowych naraz, z których każda traktowana jest jako osobny dzierżawca (Tenant). Moduł ten odpowiada za wyizolowanie danych między poszczególnymi tenantami poprzez dynamiczne kierowanie zapytań do odpowiednich schematów baz danych w locie, w oparciu o nagłówki żądań HTTP. Ponadto, wdraża on skrupulatny model uprawnień Role-Based Access Control (RBAC), zapewniający, że użytkownicy (np. kasjerzy, menedżerowie) posiadają dostęp jedynie do przydzielonych im ról i placówek (Oddziałów / Branches).
 
 ## Kluczowe komponenty
 
-Moduł `fineract-security` jest zorganizowany w pakiety, które odzwierciedlają różne aspekty zarządzania bezpieczeństwem:
+| Komponent | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **`PlatformSecurityContext`** | Kontekst bezpieczeństwa Springa przechowujący uwierzytelnionego użytkownika (`AppUser`). Daje globalny dostęp w kodzie Fineract do informacji: "Kto wywołał tę akcję?". |
+| **`TenantAwareBasicAuthenticationFilter`** / **OAuth2 Filters** | Filtry w łańcuchu Spring Security. Najpierw rozpoznają dzierżawcę (odczytując nagłówek `Fineract-Platform-TenantId`), ustawiają połączenie do bazy danych, a dopiero potem uwierzytelniają użytkownika w bazie tego konkretnego dzierżawcy. |
+| **`AppUser`**, **`Role`**, **`Permission`** | Encje domenowe opisujące model uprawnień (RBAC). Użytkownik (`AppUser`) przypisany jest do oddziału (`Office`), posiada Rolę, a Rola zawiera Uprawnienia na poziomie najdrobniejszych zapytań i komend (np. `CREATE_CLIENT`, `READ_LOAN`). |
+| **`TwoFactorAuthentication`** | Wbudowane wsparcie dla uwierzytelniania dwuskładnikowego w celu zabezpieczenia krytycznych operacji (np. wypłata powyżej pewnego limitu) z możliwością generowania tokenów jednorazowych (OTP). |
 
-*   **org.apache.fineract.infrastructure.security.api**: Prawdopodobnie zawiera kontrolery REST lub inne punkty końcowe API związane z uwierzytelnianiem (np. logowaniem), zarządzaniem sesjami i tokenami.
-*   **org.apache.fineract.infrastructure.security.command**: Definicje komend związanych z operacjami bezpieczeństwa, np. zmiana hasła, przypisywanie ról.
-*   **org.apache.fineract.infrastructure.security.constants**: Stałe używane w module, takie jak nazwy ról, uprawnienia, klucze konfiguracyjne.
-*   **org.apache.fineract.infrastructure.security.converter**: Klasy odpowiedzialne za konwersję danych związanych z bezpieczeństwem, np. z obiektów domenowych na DTO i odwrotnie.
-*   **org.apache.fineract.infrastructure.security.data**: Obiekty DTO (Data Transfer Objects) reprezentujące dane związane z bezpieczeństwem, takie jak dane logowania, informacje o użytkownikach czy rolach.
-*   **org.apache.fineract.infrastructure.security.domain**: Definicje encji domenowych (np. `AppUser`, `Role`, `Permission`) i logiki biznesowej związanej z bezpieczeństwem. W tym miejscu definiowany jest model danych dla użytkowników, ich ról i uprawnień.
-*   **org.apache.fineract.infrastructure.security.exception**: Niestandardowe wyjątki specyficzne dla modułu bezpieczeństwa, np. `AuthenticationFailedException`, `UserNotFoundException`, `PermissionDeniedException`.
-*   **org.apache.fineract.infrastructure.security.filter**: Implementacje filtrów bezpieczeństwa (np. Spring Security Filters), odpowiedzialne za przechwytywanie żądań HTTP i wykonywanie operacji uwierzytelniania/autoryzacji (np. walidacja tokenów JWT, uwierzytelnianie podstawowe).
-*   **org.apache.fineract.infrastructure.security.service**: Serwisy biznesowe odpowiedzialne za logikę bezpieczeństwa, np. `UserDetailsServiceImpl` (implementacja interfejsu Spring Security `UserDetailsService`), serwisy do zarządzania użytkownikami, rolami i uprawnieniami, serwisy do generowania i walidacji tokenów.
-*   **org.apache.fineract.infrastructure.security.vote**: Mechanizmy głosowania (Voters) w Spring Security, które decydują o dostępie do zasobów na podstawie uprawnień.
+## Architektura modułu
 
-## Przepływ danych
-
-Typowy przepływ danych związany z uwierzytelnianiem i autoryzacją w module `fineract-security` przebiega następująco:
+Architektura `fineract-security` oparta jest na systemie filtrów sieciowych, wkomponowanych w natywny mechanizm Spring Security.
 
 ```plantuml
 @startuml
-participant "Klient (Aplikacja Web/Mobile)" as Client
-participant "Fineract API Gateway (fineract-provider)" as ApiGateway
-participant "Filtr Bezpieczeństwa (security.filter)" as SecurityFilter
-participant "Serwis Uwierzytelniania (security.service)" as AuthService
-participant "Encje Domenowe (security.domain)" as Domain
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Komponenty modułu fineract-security
 
-Client -> ApiGateway: Żądanie dostępu do zasobu (np. /loans)
-ApiGateway -> SecurityFilter: Przechwycenie żądania
-alt Brak Tokena / Sesji
-    SecurityFilter -> ApiGateway: Przekierowanie do logowania
-    Client -> ApiGateway: Żądanie logowania (credentials)
-    ApiGateway -> AuthService: Próba uwierzytelnienia
-    AuthService -> Domain: Wyszukanie użytkownika
-    Domain -> Database: Pobranie danych użytkownika i hasła
-    Database --> Domain: Dane użytkownika
-    Domain --> AuthService: Dane użytkownika
-    AuthService -> AuthService: Weryfikacja hasła
-    AuthService --> ApiGateway: Token autoryzacyjny / Sesja
-    ApiGateway --> Client: Token autoryzacyjny / Sesja
-end
-Client -> ApiGateway: Kolejne żądanie z Tokenem / Sesją
-SecurityFilter -> AuthService: Walidacja Tokena / Sesji i pobranie uprawnień
-AuthService --> SecurityFilter: Uprawnienia użytkownika
-SecurityFilter -> SecurityFilter: Autoryzacja dostępu do zasobu (z wykorzystaniem Voters)
-alt Autoryzacja Udana
-    SecurityFilter --> ApiGateway: Dostęp do zasobu
-    ApiGateway -> "Inne Moduły Biznesowe" : Wykonanie operacji
-    "Inne Moduły Biznesowe" --> ApiGateway: Wynik operacji
-    ApiGateway --> Client: Odpowiedź na żądanie
-else Autoryzacja Nieudana
-    SecurityFilter --> Client: Błąd 403 Forbidden
-end
+Component(api_gateway, "REST API Client", "Nginx / Postman / App", "Wysyła zapytania uwierzytelniające wraz z nagłówkiem Fineract-Platform-TenantId")
+Component(tenant_filter, "TenantFilter", "Servlet Filter", "Odczytuje nagłówek Tenanta i ustanawia kontekst wątku połączenia z bazą (DataSource)")
+Component(auth_filter, "AuthenticationFilter", "Spring Security", "Odczytuje token JWT / Basic Auth i weryfikuje użytkownika")
+Component(user_details, "UserDetailsService", "Serwis domenowy", "Pobiera z bazy Tenanta (m_appuser) użytkownika wraz z rolami i biurem")
+Component(sec_context, "PlatformSecurityContext", "Singleton (ThreadLocal)", "Utrzymuje zautoryzowaną sesję użytkownika dla całej reszty aplikacji")
+
+SystemDb_Ext(default_db, "fineract_default DB", "Baza główna", "Lista dzierżawców, ich adresy baz danych (JDBC)")
+SystemDb_Ext(tenant_db, "tenant_XYZ DB", "Baza dzierżawcy", "Dane logowania, role użytkowników, hashe haseł (Bcrypt)")
+
+Rel(api_gateway, tenant_filter, "Żądanie HTTP (Auth)")
+Rel(tenant_filter, default_db, "Odpytuje o namiary na bazę dzierżawcy")
+Rel(tenant_filter, auth_filter, "Przekazuje ruch po ustanowieniu połączenia JDBC")
+Rel(auth_filter, user_details, "Wywołuje odczyt użytkownika")
+Rel(user_details, tenant_db, "Pobiera AppUser, Role i Password Hash")
+Rel(auth_filter, sec_context, "Ustanawia kontekst w wypadku sukcesu autoryzacji")
+
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Przepływ danych (Logowanie i Ekstrakcja Kontekstu)
 
-Moduł `fineract-security` jest kluczowym elementem infrastruktury Fineract i jest silnie związany z:
+Poniższy diagram ilustruje, jak system przetwarza każde bezpieczne żądanie do API w środowisku wielodzierżawnym.
 
-*   **fineract-core**: Wykorzystuje ogólne klasy pomocnicze, konfiguracje i obsługę wyjątków z `fineract-core`. Często dzieli również komponenty infrastrukturalne, takie jak `fineract-core/infrastructure/codes` czy `fineract-core/infrastructure/configuration`.
-*   **fineract-provider**: `fineract-provider` jest głównym punktem wejścia dla klientów i dlatego integruje filtry i serwisy uwierzytelniania/autoryzacji dostarczane przez `fineract-security` do ochrony swoich punktów końcowych API.
-*   **Inne moduły biznesowe**: Wszystkie moduły biznesowe (np. `fineract-loan`, `fineract-savings`) polegają na `fineract-security` w celu zapewnienia, że operacje są wykonywane przez autoryzowanych użytkowników i zgodnie z ich uprawnieniami.
+```plantuml
+@startuml
+title Sekwencja - Uwierzytelnianie Requestu z uwzględnieniem Multi-Tenancy
 
-## Zależności zewnętrzne i integracje
+actor Użytkownik as user
+participant "Filtr Sieciowy" as filter
+participant "TenantContextHolder" as tenant_ctx
+participant "Spring Security" as sec
+participant "AppUserRepository" as repo
+participant "PlatformSecurityContext" as app_ctx
 
-*   **Spring Security Framework**: `fineract-security` jest zbudowany w oparciu o potężny framework Spring Security, który dostarcza podstawowe mechanizmy uwierzytelniania, autoryzacji i ochrony przed typowymi atakami.
-*   **Baza Danych**: Przechowuje dane użytkowników, role, uprawnienia oraz informacje o sesjach lub tokenach (jeśli używane są tokeny odświeżające).
-*   **JWT (JSON Web Tokens)**: Prawdopodobnie moduł wykorzystuje JWT do bezstanowej autoryzacji w architekturze RESTful, co jest powszechną praktyką w nowoczesnych aplikacjach.
-*   **Protokoły uwierzytelniania**: Może integrować się z innymi protokołami, takimi jak OAuth2, LDAP lub innymi dostawcami tożsamości, w zależności od konfiguracji.
+user -> filter: GET /api/v1/loans (Header: Fineract-Platform-TenantId=default)
+activate filter
+filter -> tenant_ctx: ustaw dzierżawcę jako "default"
+activate tenant_ctx
+tenant_ctx --> filter: przełączenie DataSource
+deactivate tenant_ctx
 
-## Zarządzanie stanem i baza Danych
+filter -> sec: weryfikacja tokenu/hasła
+activate sec
+sec -> repo: znajdź użytkownika wg identyfikatora logowania
+activate repo
+repo --> sec: Zwraca AppUser, Role, Office
+deactivate repo
 
-Moduł `fineract-security` zarządza kluczowymi danymi w bazie danych, które określają tożsamość i uprawnienia użytkowników:
+sec -> sec: weryfikacja hash'a hasła / tokenu
+sec -> app_ctx: ThreadLocal.set(AppUser)
+activate app_ctx
+app_ctx --> sec: OK
+deactivate app_ctx
 
-*   **Użytkownicy (AppUser)**: Dane dotyczące użytkowników, w tym nazwy użytkowników, zaszyfrowane hasła, status konta (aktywne/nieaktywne), blokady kont.
-*   **Role (Role)**: Definicje ról w systemie (np. administrator, menedżer kredytowy, kasjer).
-*   **Uprawnienia (Permission)**: Szczegółowe uprawnienia, które mogą być przypisane do ról (np. `CREATE_LOAN`, `VIEW_CLIENT_DATA`).
-*   **Mapowanie Ról do Użytkowników**: Tabela łącząca użytkowników z przypisanymi im rolami.
-*   **Historia logowania/Audyt**: Może przechowywać historię logowania i prób dostępu dla celów audytowych i bezpieczeństwa.
+sec --> filter: Przepuszczenie ruchu do żądanego kontrolera REST
+deactivate sec
 
-Stan sesji (np. po uwierzytelnieniu) jest zazwyczaj zarządzany poprzez sesje HTTP (jeśli jest to aplikacja stanowa) lub poprzez tokeny (np. JWT) dla aplikacji bezstanowych, które są walidowane przy każdym żądaniu. Dane te są trwale przechowywane w bazie danych i dostępne za pośrednictwem komponentów warstwy `domain` i `service`.
+filter -> "Kontroler Domenowy": Wywołanie zasobu (wątek ma już podpięte uprawnienia i bazę)
+deactivate filter
+@enduml
+```
+
+## Zależności wewnętrzne i Integracje
+
+*   **Fundament dla innych modułów**: `fineract-security` wywoływany jest na samym początku przez wszystkie inne moduły odbierające ruch HTTP (`fineract-loan`, `fineract-savings`, `fineract-accounting`, `fineract-client`). Jeśli użytkownik nie ma uprawnień `READ_LOAN`, zapytanie zostanie przerwane przez adnotację `@PreAuthorize` jeszcze zanim dotrze do `fineract-loan`.
+*   **Anotacje Security**: W modułach biznesowych nagminnie stosowana jest warstwa CQRS, gdzie w CommandHandlerach sprawdza się `PlatformSecurityContext.authenticatedUser()` w celu audytu - przypisania akcji do konkretnego pracownika (Maker/Checker).
+
+## Zarządzanie stanem i baza danych
+
+Autoryzacja rozbita jest na bazę główną serwera oraz bazy poszczególnych dzierżawców.
+
+**W bazie głównej (`fineract_default`):**
+*   `tenant_server_connections`: Definiuje parametry JDBC (host, port, użytkownik, hasło) dla każdej bazy dzierżawcy.
+*   `tenants`: Tabela przechowująca identyfikator dzierżawcy (przesyłany w nagłówku HTTP), strefę czasową oraz odnośnik do jego bazy danych.
+
+**W bazie dzierżawcy (`tenant_xyz`):**
+*   `m_appuser`: Tabela użytkowników back-office. Przechowuje loginy, hasła (zakodowane), flagę usunięcia/zablokowania oraz identyfikator przypisanego oddziału banku (`office_id`).
+*   `m_role`: Role (np. "SuperUser", "Cashier", "Manager").
+*   `m_appuser_role`: Tabela asocjacyjna wielu-do-wielu (użytkownik przypisany do wielu ról).
+*   `m_permission`: Tabela definiująca tysiące uprawnień wygenerowanych na podstawie API i dozwolonych komend (Command/Query). Każdy endpoint posiada unikalny identyfikator uprawnienia w tej tabeli.
+*   `m_role_permission`: Przypisanie wybranych uprawnień do danej Roli.

@@ -1,88 +1,105 @@
-# Moduł: fineract-command
+# Moduł Przetwarzania Poleceń i Audytu (fineract-command)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-command` implementuje wzorzec projektowy Command, stanowiąc serce przetwarzania operacji biznesowych w systemie Apache Fineract. Jego głównym celem jest hermetyzacja żądania (operacji biznesowej) w obiekcie, co pozwala na parametryzowanie klientów różnymi żądaniami, kolejkowanie lub logowanie żądań oraz obsługę operacji, które można cofnąć. Dzięki temu moduł ten zapewnia atomowość, audytowalność i spójność transakcji, a także otwiera drogę do bardziej zaawansowanych wzorców, takich jak Event Sourcing czy CQRS (Command Query Responsibility Segregation).
+## Opis
+Moduł `fineract-command` implementuje wzorzec projektowy CQRS (Command Query Responsibility Segregation) rozdzielający odpowiedzialności związane ze stanem w systemie Apache Fineract. Moduł ten pełni funkcję centralnej magistrali dla wszystkich operacji modyfikujących dane (POST, PUT, DELETE) – od utworzenia klienta, przez nałożenie opłaty, aż po zatwierdzenie pożyczki. Oprócz trasowania (Routing) tych wywołań do właściwych "Zarządców" (Command Handlers), kluczową rolą tego modułu jest rejestrowanie absolutnie każdego żądania (nawet tego zakończonego błędem) w bazie danych na potrzeby szczegółowego audytu zdarzeń (Event Sourcing) oraz mechanizmów Maker-Checker.
+
+Główne funkcjonalności biznesowe to:
+* Rejestrowanie historii operacji (Auditing): Kto wykonał czynność, kiedy, z jakimi parametrami i jaki był jej rezultat.
+* Maker-Checker (Cztery Oczy): Architektura ta pozwala na to, aby jeden pracownik (Maker) zainicjował "Komendę", a inny (Checker) ją zatwierdził, zanim na stałe zmieni ona stan bazy danych.
+* Idempotentność (Idempotency): Moduł radzi sobie z ponowieniami tego samego zapytania z powodu np. niestabilnego internetu, blokując powielone komendy (np. "Wypłać podwójnie tę samą kwotę").
 
 ## Kluczowe komponenty
 
-Moduł `fineract-command` jest zorganizowany wokół koncepcji komend i ich obsługi:
+| Komponent | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **`CommandWrapper`** | Obiekt stanowiący opakowanie żądania REST. Posiada on nazwę encji (np. `LOAN`), akcję (np. `APPROVE`) oraz ładunek (Payload w formacie JSON). |
+| **`SynchronousCommandProcessingService`** | Główny silnik procesujący komendy synchronicznie. Przyjmuje wygenerowany `CommandWrapper`, przeprowadza na nim walidację uprawnień, a następnie przekazuje go do adekwatnego Handlera. Na końcu loguje proces (sukces lub wycofanie) do audytu. |
+| **`CommandSource`** | Tabela/Encja agregująca wszelkie istotne dane o komendzie. Posiada pole określające czy komenda była `PROCESSING`, `FAILED`, czy `PROCESSED`. To tu lądują zatwierdzone i niezatwierdzone działania dla Maker-Checker. |
+| **`CommandProcessingService`** i *Rollbacki* | Mechanizm wycofujący operacje (Rollback), jeśli podczas przetwarzania komendy wystąpi błąd na poziomie bazy danych. Transakcja oznaczana jest wtedy stosowną flagą i wycofywana w tle. |
 
-*   **org.apache.fineract.command.core**: Zawiera podstawowe interfejsy i klasy definiujące wzorzec Command:
-    *   `Command.java`: Interfejs bazowy lub klasa abstrakcyjna dla wszystkich komend w systemie. Komenda reprezentuje pojedynczą operację biznesową (np. `CreateLoanCommand`, `ApproveClientCommand`).
-    *   `CommandHandler.java`: Interfejs dla obiektów, które wiedzą, jak wykonać określoną komendę. Każda konkretna komenda ma zazwyczaj swój dedykowany `CommandHandler`.
-    *   `CommandExecutor.java`: Odpowiada za orkiestrację wykonania komend, często delegując zadania do `CommandPipeline`.
-    *   `CommandPipeline.java`: Definiuje sekwencję kroków, przez które przechodzi komenda, zanim zostanie wykonana przez `CommandHandler` (np. walidacja, autoryzacja, logowanie, wykonanie, persystencja).
-    *   `CommandRouter.java`: Służy do mapowania i routingu komendy do odpowiedniego `CommandHandler`, zazwyczaj na podstawie typu komendy.
-    *   `CommandAuditor.java`: Odpowiada za rejestrowanie szczegółów każdej wykonanej komendy, co jest kluczowe dla śledzenia zmian w systemie i spełniania wymagań audytowych.
-    *   `CommandConstants.java`: Stałe używane w kontekście komend.
-    *   `CommandProperties.java`: Klasa do przechowywania właściwości konfiguracyjnych modułu Command.
-    *   `exception`: Niestandardowe wyjątki specyficzne dla modułu Command.
-*   **org.apache.fineract.command.implementation**: Prawdopodobnie zawiera konkretne implementacje `CommandHandler` dla różnych komend biznesowych z innych modułów Fineract.
-*   **org.apache.fineract.command.persistence**: Odpowiada za trwałe przechowywanie informacji o komendach (np. ich status, dane wejściowe, wynik). Jest to kluczowe dla audytowalności, odtwarzalności i ewentualnego wzorca Event Sourcing.
-*   **org.apache.fineract.command.starter**: Zawiera klasy auto-konfiguracji Spring Boot, ułatwiające integrację modułu `fineract-command` z innymi modułami Fineract.
+## Architektura modułu
 
-## Przepływ danych
-
-Przepływ danych w module `fineract-command` jest scentralizowany wokół koncepcji wysyłania, przetwarzania i persystowania komend.
-
-### Uproszczony przepływ wykonania komendy:
+Architektura oparta o sztywne i rozdzielne warstwy: REST -> Wrapper -> CommandProcessingService -> Domain Service (poprzez CommandHandler).
 
 ```plantuml
 @startuml
-actor "Użytkownik/System Zewnętrzny" as Client
-participant "API (fineract-provider)" as ApiGateway
-participant "CommandGateway (fineract-command)" as CommandGateway
-participant "CommandRouter (fineract-command)" as CommandRouter
-participant "CommandPipeline (fineract-command)" as CommandPipeline
-participant "CommandHandler (fineract-command)" as CommandHandler
-participant "Serwis Biznesowy (np. fineract-loan)" as BusinessService
-participant "CommandAuditor (fineract-command)" as CommandAuditor
-participant "Repozytorium Komend (fineract-command.persistence)" as CommandRepo
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Komponenty modułu fineract-command
 
-Client -> ApiGateway: Żądanie operacji (np. POST /clients/1/loans)
-ApiGateway -> CommandGateway: Tworzy i wysyła obiekt Komendy (np. CreateLoanCommand)
-CommandGateway -> CommandRouter: Routowanie Komendy do odpowiedniego Handlera
-CommandRouter -> CommandPipeline: Przekazuje Komendę do Potoku Przetwarzania
-CommandPipeline -> CommandPipeline: Walidacja, Autoryzacja, Logowanie
-CommandPipeline -> CommandHandler: Wykonanie logiki biznesowej Komendy
-CommandHandler -> BusinessService: Wywołuje logikę biznesową (np. tworzenie obiektu pożyczki)
-BusinessService -> Database: Modyfikuje stan danych (np. zapisuje pożyczkę)
-Database --> BusinessService: Potwierdzenie zapisu
-BusinessService --> CommandHandler: Wynik operacji
-CommandHandler --> CommandPipeline: Wynik wykonania Komendy
-CommandPipeline -> CommandAuditor: Rejestrowanie wykonania Komendy
-CommandAuditor -> CommandRepo: Persystencja danych audytu Komendy
-CommandRepo -> Database: Zapis danych Komendy
-Database --> CommandRepo: Potwierdzenie zapisu
-CommandRepo --> CommandAuditor: Potwierdzenie
-CommandAuditor --> CommandPipeline: Potwierdzenie audytu
-CommandPipeline --> CommandGateway: Wynik Komendy
-CommandGateway --> ApiGateway: Wynik Komendy
-ApiGateway --> Client: Odpowiedź na żądanie
+Component(api_controller, "REST API Controller", "Spring Web", "Odbiera JSONa i generuje z niego CommandWrapper")
+Component(command_service, "SynchronousCommandProcessingService", "Spring Service", "Silnik autoryzujący i audytujący dla wszystkich poleceń w systemie")
+Component(command_source_repo, "CommandSourceRepository", "JPA / Hibernate", "Zapisuje i odczytuje logi o wykonanych komendach")
+Component(domain_handlers, "Command Handlers (w innych modułach)", "Component", "Specjalizowane mikro-usługi odbierające komendę, wykonujące logikę dziedzinową i modyfikujące encje biznesowe (np. Loan, Client)")
+
+SystemDb_Ext(db, "Baza Danych Dzierżawcy", "Zapis zdarzeń do bazy")
+
+Rel(api_controller, command_service, "Deleguje CommandWrapper")
+Rel(command_service, command_source_repo, "Zapisuje (INSERT) do m_portfolio_command_source")
+Rel(command_service, domain_handlers, "Odszukuje po nazwie (np. APPROVELOAN) i wywołuje handler")
+Rel(domain_handlers, db, "Aktualizacje Domenowe (UPDATE/INSERT)")
+Rel(command_source_repo, db, "Odczyt/Zapis (Logi systemowe)")
+
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Przepływ danych (Wykonanie i Rejestracja Komendy)
 
-Moduł `fineract-command` jest centralnym punktem, od którego zależy sposób inicjowania i przetwarzania operacji biznesowych w innych modułach Fineract:
+Poniższy diagram ilustruje, jak system przetwarza żądanie modyfikacji stanu od momentu wywołania API do ostatecznego zalogowania operacji.
 
-*   **fineract-core**: Wykorzystuje podstawowe komponenty infrastrukturalne i globalne narzędzia, np. do obsługi wyjątków, konfiguracji.
-*   **fineract-provider**: API systemu Fineract (znajdujące się w `fineract-provider`) jest głównym konsumentem modułu `fineract-command`, przekształcając żądania HTTP w obiekty Komend i wysyłając je do przetworzenia.
-*   **Wszystkie moduły biznesowe (np. fineract-loan, fineract-savings, fineract-accounting)**: Implementują one własne Komendy i `CommandHandler`y, które są zarządzane i wykonywane przez mechanizmy z `fineract-command`. Moduły te dostarczają logikę biznesową, która jest aktywowana przez Command Handlery.
+```plantuml
+@startuml
+title Sekwencja - Wykonanie i logowanie Komendy (CQRS)
 
-## Zależności zewnętrzne i integracje
+actor Pracownik as user
+participant "REST Controller" as api
+participant "CommandProcessing\nService" as command_svc
+participant "CommandSource" as source_entity
+participant "Domain Command\nHandler" as handler
+participant "Zewnętrzny\nModuł Biznesowy" as domain
+participant "Baza Danych" as db
 
-*   **Spring Framework**: `fineract-command` w pełni wykorzystuje możliwości Springa do zarządzania zależnościami (Dependency Injection), konfiguracji oraz zarządzania transakcjami.
-*   **Baza Danych**: Niezbędna do persystencji stanu systemu po wykonaniu komend oraz do przechowywania historii komend (`CommandAuditor`, `CommandRepo`).
-*   **Event Bus/Message Broker (potencjalnie)**: Chociaż nie jest to bezpośrednio widoczne, architektura oparta na komendach często jest pierwszym krokiem do integracji z systemami kolejkowania wiadomości (np. Kafka, RabbitMQ) w celu asynchronicznego przetwarzania komend lub publikowania zdarzeń.
+user -> api: POST /loans/1?command=approve (JSON)
+activate api
+api -> api: Zbuduj CommandWrapper(LOAN, APPROVE, JSON)
+api -> command_svc: processAndLogCommand(CommandWrapper)
+activate command_svc
 
-## Zarządzanie stanem i baza Danych
+command_svc -> command_svc: Sprawdź Idempotentność (zablokuj jeśli duplikat z nagłówkiem Idempotency-Key)
+command_svc -> db: INSERT m_portfolio_command_source (Status: PROCESSING)
+command_svc -> handler: Wyszukaj i wywołaj Handler(CommandWrapper)
+activate handler
 
-`fineract-command` ma kluczowe znaczenie dla zarządzania stanem systemu:
+handler -> domain: Wywołaj serwis biznesowy dla zatwierdzenia pożyczki
+activate domain
+domain -> db: Zapisz zmiany w domenie (UPDATE m_loan)
+domain --> handler: Sukces (CommandProcessingResult)
+deactivate domain
 
-*   **Zmiana Stanu**: Każda komenda reprezentuje intencję zmiany stanu w systemie. Po jej pomyślnym wykonaniu, stan danych biznesowych (np. status pożyczki, saldo konta) w bazie danych ulega aktualizacji.
-*   **Audytowalność**: Poprzez persystencję każdej wykonanej komendy (zawierającej metadane, dane wejściowe, datę, użytkownika), moduł tworzy kompleksowy dziennik zmian. Ten dziennik jest niezwykle cenny dla audytu, śledzenia błędów, a także dla rekonstrukcji stanu systemu w dowolnym momencie.
-*   **Idempotencja**: Dzięki zapisywaniu i śledzeniu komend, można implementować mechanizmy zapewniające, że wielokrotne wykonanie tej samej komendy (np. z powodu problemów z siecią) nie prowadzi do wielokrotnych zmian stanu.
-*   **Baza Danych**: Używana jest do trwałego przechowywania zarówno danych biznesowych zmienionych przez komendy, jak i samych rekordów komend (historii). W ten sposób baza danych staje się zarówno źródłem prawdy dla stanu systemu, jak i archiwum jego ewolucji.
+handler --> command_svc: Rezultat
+deactivate handler
+
+command_svc -> source_entity: UPDATE status na PROCESSED i zapisz result.id
+command_svc -> db: Zatwierdzenie modyfikacji (Transaction Commit)
+command_svc --> api: Wynik
+deactivate command_svc
+
+api --> user: 200 OK (Odpowiedź)
+deactivate api
+@enduml
+```
+
+## Zależności wewnętrzne i Integracje
+
+*   **Fundament Zmian Stanu**: Każdy moduł posiadający encje i reguły biznesowe modyfikujące bazę danych (`fineract-loan`, `fineract-client`, `fineract-savings`) integruje ten moduł, dostarczając implementacje interfejsu (Command Handlery). Brak tego modułu uniemożliwiłby zapisywanie jakichkolwiek informacji o użytkownikach czy kredytach.
+*   **Wielodzierżawność i Autoryzacja (`fineract-security`)**: Przed rozpoczęciem wywoływania jakiegokolwiek handlera, `CommandProcessingService` sprawdza w `PlatformSecurityContext`, czy obecnie zalogowany użytkownik ma uprawnienie dokładnie do akcji, którą reprezentuje przekazana mu komenda (np. `APPROVE_LOAN`).
+
+## Zarządzanie stanem i baza danych
+
+Główna tabela operacyjna do której zapisywany jest ruch to `m_portfolio_command_source`. Składa się na nią:
+
+*   **`m_portfolio_command_source`**: Tabela w bazie dzierżawcy będąca swoistym dziennikiem zdarzeń całego systemu (Audit Trail). Przechowuje JSON z żądaniem wejściowym (parametry komendy). Wskazuje na identyfikator zasobu `resource_id` (np. ID klienta), datę zdarzenia, `maker_id` (kto rozpoczął zdarzenie) oraz, jeżeli wymaga tego zasada Maker-Checker, status oczekiwania i `checker_id` (kto autoryzował komendę i pozwolił jej zmodyfikować bazę danych). 
+*   **`m_permission`**: Bezpośrednia powiązana tabela w kontekście reguł zabezpieczeń (Każdy `CommandWrapper` tworzy unikalny string uprawnień, który weryfikowany jest w tej tabeli).
+
+```

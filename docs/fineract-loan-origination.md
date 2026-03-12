@@ -1,102 +1,93 @@
-# Moduł: fineract-loan-origination
+# Moduły Wnioskowania Pożyczkowego i Progresywnego (fineract-loan-origination & progressive-loan)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-loan-origination` jest odpowiedzialny za zarządzanie całym procesem pozyskiwania i udzielania pożyczek (loan origination). Obejmuje to etapy od momentu złożenia wniosku o pożyczkę, przez gromadzenie danych, ocenę zdolności kredytowej, decyzję kredytową, aż po formalne zatwierdzenie i przygotowanie do wypłaty środków. Moduł ten wspiera workflowy, które mogą być konfigurowane w celu dostosowania do różnych produktów pożyczkowych i wewnętrznych polityk instytucji finansowej. Jego celem jest automatyzacja i usprawnienie procesu decyzyjnego, minimalizacja ryzyka oraz zapewnienie zgodności z regulacjami.
+## Opis
+Moduły `fineract-loan-origination`, `fineract-progressive-loan` oraz dołączony silnik generacji i `fineract-working-capital-loan` są jednymi z nowszych ewolucyjnie poddomen portfela w systemie Apache Fineract, odpowiadającymi za udoskonalony i nowoczesny proces udzielania oraz konfiguracji pożyczek.
 
-## Kluczowe komponenty
+1.  **Loan Origination (Wnioskowanie)**: Reprezentuje etap przed staniem się de facto pożyczkobiorcą. W tradycyjnym procesie Fineract pożyczkę otwierano tworząc wprost rekord `Loan`. W nowym modelu wprowadzono pełnoprawny proces Origination – weryfikacji zdolności kredytowej klienta, cyklów i analizy kredytowej (często we współpracy z zewnętrznymi algorytmami Credit Scoring i Decision Engines).
+2.  **Progressive Loan (Raty Progresywne / Zmienne Harmonogramy)**: Klasyczny moduł `fineract-loan` miał duże trudności i "betonował" równe ułożenie rat w harmonogramach (np. Równe raty kapitałowo-odsetkowe, równe kapitałowe). Klienci detaliczni we współczesnych bankach potrzebują wyliczania harmonogramów podatnych np. na drastyczne skoki wskaźników referencyjnych stóp procentowych (np. WIBOR, Euribor), lub możliwości dynamicznego przeliczania całych rat po częściowych wpłatach / zawieszeniach wakacji kredytowych z całkowitym nowym generowaniem kalendarza spłat. "Progressive Loan" stanowi ewolucyjny skok z re-architekturą interfejsów kalkulacji (Embeddable Schedule Generator).
 
-Moduł `fineract-loan-origination` jest zorganizowany wokół pakietu `org.apache.fineract.portfolio.loanorigination`, który zawiera następujące podpakietu:
+## Kluczowe komponenty biznesowe
 
-*   **org.apache.fineract.portfolio.loanorigination.api**: Zawiera kontrolery REST lub interfejsy API do interakcji z modułem, umożliwiając składanie wniosków, śledzenie ich statusu, podejmowanie decyzji i zarządzanie workflowem.
-*   **org.apache.fineract.portfolio.loanorigination.config**: Konfiguracje specyficzne dla procesu pozyskiwania pożyczek, np. definicje workflowów, reguły decyzyjne.
-*   **org.apache.fineract.portfolio.loanorigination.data**: Obiekty DTO (Data Transfer Objects) reprezentujące wnioski o pożyczki, ich statusy, historię workflow oraz dane wejściowe/wyjściowe dla operacji API.
-*   **org.apache.fineract.portfolio.loanorigination.domain**: Zawiera encje domenowe, takie jak `LoanApplication` (reprezentująca wniosek o pożyczkę), `LoanOriginationWorkflow` (definicje kroków i stanów workflow) oraz powiązaną logikę biznesową.
-*   **org.apache.fineract.portfolio.loanorigination.enricher**: Komponenty odpowiedzialne za wzbogacanie danych wniosku o pożyczkę o dodatkowe informacje (np. dane kredytowe z zewnętrznych źródeł, dane klienta).
-*   **org.apache.fineract.portfolio.loanorigination.exception**: Niestandardowe wyjątki obsługujące błędy specyficzne dla procesu pozyskiwania pożyczek.
-*   **org.apache.fineract.portfolio.loanorigination.handler**: Implementacje `CommandHandler`ów, które przetwarzają komendy związane z wnioskami o pożyczki (np. `SubmitLoanApplicationCommand`, `ApproveLoanApplicationCommand`, `RejectLoanApplicationCommand`).
-*   **org.apache.fineract.portfolio.loanorigination.mapper**: Klasy odpowiedzialne za mapowanie obiektów pomiędzy warstwami (np. DTO na encje domenowe) dla danych wniosków.
-*   **org.apache.fineract.portfolio.loanorigination.serialization**: Obsługa serializacji i deserializacji danych wniosków o pożyczki.
-*   **org.apache.fineract.portfolio.loanorigination.service**: Serwisy biznesowe implementujące główną logikę zarządzania procesem pozyskiwania pożyczek, w tym zarządzanie workflowem, podejmowanie decyzji i interakcje z innymi modułami.
+| Komponent | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **Loan Decisioning / Origination** | Etapy i logiki w trakcie procesu decyzyjnego. Wprowadza model wielostopniowego zatwierdzania i rewizji decyzji pod kątem ryzyka finansowego zanim pożyczka w ogóle zostanie oficjalnie otworzona. |
+| **Współczynnik Cyklu Życia Kredytobiorcy (Borrower Cycle)** | Funkcjonalność ograniczająca ryzyko po stronie MFI i nagradzająca stałych klientów (np. "Jeśli klient pomyślnie spłacił u nas 3 pożyczki (Cycle 3), przy pożyczce Cycle 4 automatycznie udostępnij mu wyższy limit kredytowy i niższe RRSO"). |
+| **Schedule Generator (Embeddable)** | Nowoczesny, odseparowany matematyczny moduł wyliczający daty spłat i kwoty. "Embeddable" oznacza to, że cała biblioteka matematyczno-algorytmiczna nie jest zakopana w transakcjach relacyjnych JPA, ale może być użyta w locie bez zapisu do bazy np. przez Front-End UI, by wyświetlić symulację kredytu w locie przy suwakach. |
+| **Progressive Interest Calculation** | Zaawansowana matematyka "odsetek progresywnych" (odsetki od malejącego bilansu powiązane ze skomplikowanymi opłatami wyrównawczymi). |
 
-## Przepływ danych
+## Architektura modułu
 
-Przepływ danych w module `fineract-loan-origination` jest zorientowany na zarządzanie stanem wniosku o pożyczkę i jego przechodzeniem przez zdefiniowany workflow.
-
-### Uproszczony przepływ obsługi wniosku o pożyczkę:
+Architektura z racji bycia ewolucją, opiera się mocno na starych wskaźnikach bazy danych `fineract-loan` po uprzednio przeprowadzonych migracjach, ale wyłącza starsze handlery (CommandHandlers) dla wybranych produktów na rzecz nowych algorytmów.
 
 ```plantuml
 @startuml
-participant "Klient (UI/API)" as Client
-participant "Kontroler REST (fineract-provider/loan-origination)" as LoanOriginationController
-participant "CommandHandler (loanorigination.handler)" as LoanOriginationCommandHandler
-participant "LoanOriginationService (loanorigination.service)" as LoanOriginationService
-participant "LoanApplication (domain)" as LoanApplicationEntity
-participant "fineract-client" as ClientModule
-participant "fineract-document" as DocumentModule
-participant "fineract-loan" as LoanModule
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Zależności nowej origincaji i pożyczek progresywnych
 
-Client -> LoanOriginationController: Złóż wniosek o pożyczkę (POST /loanapplications)
-LoanOriginationController -> LoanOriginationCommandHandler: Wysyła SubmitLoanApplicationCommand
-LoanOriginationCommandHandler -> LoanOriginationService: Inicjuje nowy wniosek
-LoanOriginationService -> ClientModule: Weryfikacja danych klienta
-ClientModule -> Database: Odczyt danych klienta
-Database --> ClientModule: Dane klienta
-ClientModule --> LoanOriginationService: Potwierdzenie danych klienta
-LoanOriginationService -> DocumentModule: Zapis powiązanych dokumentów
-DocumentModule -> Database: Zapis dokumentów
-Database --> DocumentModule: Potwierdzenie
-DocumentModule --> LoanOriginationService: Potwierdzenie zapisu dokumentów
-LoanOriginationService -> LoanApplicationEntity: Tworzy encję LoanApplication (status: PENDING)
-LoanApplicationEntity -> Database: Zapisz LoanApplication
-Database --> LoanApplicationEntity: Potwierdzenie zapisu
-LoanApplicationEntity --> LoanOriginationService: Nowy wniosek
-LoanOriginationService --> LoanOriginationCommandHandler: Wynik operacji
-LoanOriginationCommandHandler --> LoanOriginationController: Wynik operacji
-LoanOriginationController --> Client: Odpowiedź HTTP 201 (z ID wniosku)
+Component(api_channels, "Internet Banking / Wnioski", "Zewnętrzne Kanały", "Zbierają wnioski od klientów")
+Component(origination_svc, "LoanOrigination API", "fineract-loan-origination", "Weryfikuje limity portfela i wyznaczniki ryzyka (Borrower Cycles, Kredyt odrzucony/zaakceptowany)")
+Component(decision_engine, "External Decision Engine", "Zewnętrzna Analiza Ryzyka (Opcjonalnie)", "Autoryzuje ryzyko (Scoring API)")
+Component(progressive_module, "Progressive Loan Service", "fineract-progressive-loan", "Rejestruje pożyczkę jeśli uzyskała Aprobatę w Origination jako progresywną")
+Component(schedule_math, "Embeddable Schedule Generator", "Moduł Matematyczny", "Przelicza natychmiastowo nowy, uelastyczniony kształt harmonogramu pod modyfikacje stóp bazowych w systemie")
 
-Admin -> LoanOriginationController: Zatwierdź wniosek (POST /loanapplications/{id}/approve)
-LoanOriginationController -> LoanOriginationCommandHandler: Wysyła ApproveLoanApplicationCommand
-LoanOriginationCommandHandler -> LoanOriginationService: Aktualizuje status wniosku na APPROVED
-LoanOriginationService -> LoanApplicationEntity: Pobiera i aktualizuje LoanApplication
-LoanApplicationEntity -> Database: Zaktualizuj LoanApplication
-Database --> LoanApplicationEntity: Potwierdzenie
-LoanApplicationEntity --> LoanOriginationService: Zaktualizowany wniosek
-LoanOriginationService -> LoanModule: Utwórz faktyczną pożyczkę (na podstawie danych wniosku)
-LoanModule -> Database: Zapisz nową pożyczkę
-Database --> LoanModule: Potwierdzenie
-LoanModule --> LoanOriginationService: Potwierdzenie
-LoanOriginationService --> LoanOriginationCommandHandler: Wynik operacji
-LoanOriginationCommandHandler --> LoanOriginationController: Wynik operacji
-LoanOriginationController --> Admin: Odpowiedź HTTP 200 OK
+SystemDb_Ext(db, "Baza Danych Dzierżawcy", "Model Pożyczkowy")
+
+Rel(api_channels, origination_svc, "Wysyłanie formularza wniosku")
+Rel(origination_svc, decision_engine, "Wysyłanie danych kandydata (Score Check)")
+Rel(origination_svc, progressive_module, "Zlecenie otworzenia zweryfikowanej umowy")
+Rel(progressive_module, schedule_math, "Generowanie Harmonogramu (In-memory array)")
+Rel(progressive_module, db, "Aktualizacja m_loan_repayment_schedule o zrewidowane w locie dane")
+
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Przepływ danych (Zmienne Oprocentowanie Progresywne)
 
-Moduł `fineract-loan-origination` jest silnie zintegrowany z wieloma innymi modułami Fineract:
+Proces ten pokazuje moc zmiennych harmonogramów, które były barierą do wdrożenia w Fineract w krajach europejskich, gdzie kredyty hipoteczne miały raty modyfikowane dynamicznie w trakcie trwania umowy.
 
-*   **fineract-core**: Wykorzystuje globalne usługi, narzędzia i konfiguracje.
-*   **fineract-command**: Komendy związane z wnioskami o pożyczki są przetwarzane przez ogólny mechanizm komend Fineract.
-*   **fineract-provider**: Udostępnia punkty końcowe API, które wywołują funkcjonalności modułu `fineract-loan-origination`.
-*   **fineract-client**: Moduł ten pobiera i weryfikuje dane klientów w trakcie procesu składania wniosku.
-*   **fineract-document**: Umożliwia dołączanie i zarządzanie dokumentami (np. skanami dowodów, zaświadczeniami o dochodach) do wniosków o pożyczki.
-*   **fineract-loan**: Po pomyślnym zatwierdzeniu wniosku, `fineract-loan-origination` inicjuje utworzenie rzeczywistej pożyczki w module `fineract-loan`.
-*   **fineract-validation**: Wykorzystywany do walidacji danych wejściowych w trakcie składania wniosku.
+```plantuml
+@startuml
+title Sekwencja - Przeliczenie Raty Progresywnej przy skoku stopy bazowej
 
-## Zależności zewnętrzne i integracje
+actor Bankier as bank
+participant "Rate Module\n(Stopy Procentowe)" as rates
+participant "ProgressiveLoan\nService" as loan_prog
+participant "ScheduleMath\nGenerator" as math
+participant "Baza Danych (m_loan)" as db
 
-*   **Baza Danych**: Główna zależność. Wszystkie dane dotyczące wniosków o pożyczki, ich statusów, historii workflow i powiązanych informacji są trwale przechowywane w relacyjnej bazie danych.
-*   **Spring Framework**: Wykorzystuje mechanizmy Spring do zarządzania transakcjami, wstrzykiwania zależności i konfiguracji.
-*   **Systemy oceny zdolności kredytowej (potencjalnie)**: Chociaż nie jest to bezpośrednio widoczne, w bardziej złożonych implementacjach moduł ten może integrować się z zewnętrznymi systemami do oceny zdolności kredytowej.
+bank -> rates: Aktualizacja stopy WIBOR/Lending Rate z 5% na 7%
+activate rates
+rates -> rates: Zapis nowej stopy FloatingRate
+rates -> loan_prog: Wywołaj Event - "Wymagane przeliczenie aktywnych produktów progresywnych"
+deactivate rates
 
-## Zarządzanie stanem i baza Danych
+activate loan_prog
+loan_prog -> db: Pobierz wszystkie pożyczki progresywne powiązane ze stopą bazową
+db --> loan_prog: Lista 10,000 pożyczek
 
-Moduł `fineract-loan-origination` zarządza stanem wniosków o pożyczki i ich workflowem w bazie danych:
+loop Dla każdej pożyczki
+    loan_prog -> math: simulateProgressiveSchedule(currentBalance, newRate=7%, remainingMonths)
+    activate math
+    math -> math: Wyrównaj pozostałe raty, utrzymując kwoty do zera kapitału
+    math --> loan_prog: Zwraca przeliczoną od nowa tablicę rat DTO (Installments)
+    deactivate math
+    
+    loan_prog -> db: DROP stare przyszłe raty (Installments > current_date)
+    loan_prog -> db: INSERT nowe wyliczone raty do m_loan_repayment_schedule
+end
+deactivate loan_prog
+@enduml
+```
 
-*   **Wnioski o Pożyczki (LoanApplication)**: Przechowuje szczegółowe dane dotyczące każdego wniosku, w tym informacje o kliencie, wnioskowanej kwocie, produkcie pożyczkowym, statusie wniosku (np. `PENDING`, `APPROVED`, `REJECTED`).
-*   **Historia Workflow**: Rejestruje każdy etap i zmianę statusu wniosku w procesie workflow, co zapewnia pełną audytowalność i możliwość śledzenia historii.
-*   **Powiązane Dane**: Przechowuje odwołania do powiązanych danych (np. ID klienta, ID dokumentów), które są przechowywane w innych modułach.
+## Zależności wewnętrzne i Integracje
 
-Wszystkie te dane są modelowane jako encje JPA i trwale przechowywane w bazie danych, co zapewnia spójność, audytowalność i możliwość wznowienia procesów pożyczkowych w dowolnym momencie.
+*   Moduły Progressive oraz Origination są ściśle powiązane architektonicznie wstecz (Backward Compatibility) z bazowym modułem `fineract-loan`. Operują one wręcz na tych samych tabelach `m_loan` oraz generują identyczne `BusinessEvents`, po to aby moduł Księgowości (`fineract-accounting`) nie odczuł żadnej różnicy miedzy zaksięgowaniem spłaty starego i nowego algorytmu.
+
+## Zarządzanie stanem i baza danych
+
+System bazuje głównie na poszerzonych kolumnach i starych strukturach.
+*   Zmianie w bazie ulegają definicje samego schematu spłat (dodatkowe wskaźniki dla kapitału postępującego i odsetek zakumulowanych), by odróżnić nową metodę rozliczeń ułatwiając np. szybkie wcześniejsze zamknięcia całego rachunku przez klienta (Early Repayment bez kar). Oznacza to m.in. trzymanie stanów stóp referencyjnych (zmienne `m_floating_rates`) aktualizowanych centralnie i propagowanych na wszystkie powiązane rachunki pożyczkowe w momencie przeliczania (COB lub ad-hoc).
+
+```

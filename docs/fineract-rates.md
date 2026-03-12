@@ -1,79 +1,47 @@
-# Moduł: fineract-rates
+# Moduł Stóp Procentowych (fineract-rates)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-rates` w Apache Fineract jest odpowiedzialny za zarządzanie zmiennymi stopami procentowymi (floating rates). Stopy te są dynamicznie dostosowywane do warunków rynkowych i mogą wpływać na oprocentowanie produktów finansowych, takich jak pożyczki czy konta oszczędnościowe. Moduł ten umożliwia definiowanie, aktualizowanie i śledzenie historii zmiennych stóp procentowych, zapewniając elastyczność i reagowanie na zmiany w otoczeniu ekonomicznym. Jego głównym celem jest dostarczenie aktualnych i historycznych danych o stopach procentowych, które są następnie wykorzystywane przez inne moduły systemu.
+## Opis
+Moduł `fineract-rates` dostarcza scentralizowane usługi zarządzania stopami bazowymi i referencyjnymi (ang. Floating Rates, Base Rates) w systemie Apache Fineract. Obejmuje to popularne wskaźniki makroekonomiczne takie jak WIBOR, LIBOR, EURIBOR, czy stopy referencyjne lokalnych banków centralnych.
 
-## Kluczowe komponenty
+Zarządzanie zmiennym oprocentowaniem jest kluczowe w nowoczesnej bankowości. Zamiast określać "sztywne" (Flat) oprocentowanie w momencie podpisywania umowy pożyczkowej lub depozytowej (np. 10% w skali roku), instytucja finansowa może oprzeć umowę o stopę referencyjną i narzut marży (np. WIBOR 3M + 2% marży banku). Gdy bank centralny zmienia wskaźnik WIBOR, Fineract korzystając z tego modułu, propaguje nową wartość do powiązanych kont oszczędnościowych i kredytowych.
 
-Moduł `fineract-rates` jest zorganizowany wokół pakietu `org.apache.fineract.portfolio.floatingrates`, który zawiera następujące podpakietu:
+## Kluczowe komponenty biznesowe
 
-*   **org.apache.fineract.portfolio.floatingrates.api**: Zawiera kontrolery REST lub interfejsy API do interakcji z modułem, umożliwiając pobieranie, tworzenie, aktualizowanie i aktywowanie zmiennych stóp procentowych.
-*   **org.apache.fineract.portfolio.floatingrates.data**: Obiekty DTO (Data Transfer Objects) reprezentujące dane zmiennych stóp procentowych, ich historię i powiązane parametry.
-*   **org.apache.fineract.portfolio.floatingrates.domain**: Zawiera encje domenowe, takie jak `FloatingRate` (definiująca zmienną stopę procentową) i `FloatingRatePeriod` (reprezentującą konkretny okres obowiązywania danej wartości stopy). Logika biznesowa do zarządzania tymi encjami znajduje się również tutaj.
-*   **org.apache.fineract.portfolio.floatingrates.exception**: Niestandardowe wyjątki obsługujące błędy specyficzne dla zarządzania zmiennymi stopami procentowymi.
-*   **org.apache.fineract.portfolio.floatingrates.handler**: Implementacje `CommandHandler`ów, które przetwarzają komendy związane ze zmiennymi stopami procentowymi (np. `UpdateFloatingRateCommand`, `ActivateFloatingRateCommand`).
-*   **org.apache.fineract.portfolio.floatingrates.serialization**: Obsługa serializacji i deserializacji danych zmiennych stóp procentowych.
-*   **org.apache.fineract.portfolio.floatingrates.service**: Serwisy biznesowe implementujące główną logikę zarządzania zmiennymi stopami procentowymi, w tym ich tworzenie, aktualizację, pobieranie aktualnych wartości i historii.
-*   **org.apache.fineract.portfolio.floatingrates.starter**: Klasa auto-konfiguracji Spring Boot dla modułu.
+| Komponent | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **`FloatingRate`** | Definicja konkretnego wskaźnika zmiennego (np. "WIBOR_6M"). |
+| **`FloatingRatePeriod`** | Zestawienie wartości wskaźnika (Rate Value) obowiązującego w określonym przedziale czasu (`from_date` do `to_date`). Pozwala systemowi na odtwarzanie pełnej historii zmian stopy i stosowanie historycznych stawek do kalkulacji zaległych odsetek. |
+| **`Rate`** | Standardowa tabela definiująca opłaty procentowe powiązane z pożyczką, które mogą mieć zastosowanie w specyficznych produktach (niebędących stricte stopami referencyjnymi, np. specyficzne oprocentowanie promocyjne). |
 
-## Przepływ danych
+## Architektura modułu
 
-Przepływ danych w module `fineract-rates` koncentruje się na zarządzaniu definicjami zmiennych stóp procentowych i udostępnianiu ich innym modułom.
-
-### Uproszczony przepływ aktualizacji zmiennej stopy procentowej:
+Architektura tego komponentu to w głównej mierze scentralizowany słownik danych zapytywany przez moduły wykonawcze (np. wyliczarkę rat).
 
 ```plantuml
 @startuml
-participant "Administrator (UI/API)" as Admin
-participant "Kontroler REST (fineract-provider/rates)" as RatesController
-participant "CommandHandler (floatingrates.handler)" as FloatingRatesCommandHandler
-participant "FloatingRateService (floatingrates.service)" as FloatingRateService
-participant "FloatingRate (domain)" as FloatingRateEntity
-participant "FloatingRatePeriod (domain)" as FloatingRatePeriodEntity
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Zależności modułu fineract-rates
 
-Admin -> RatesController: Żądanie aktualizacji zmiennej stopy procentowej (POST /floatingrates/{id}/update)
-RatesController -> FloatingRatesCommandHandler: Wysyła UpdateFloatingRateCommand
-FloatingRatesCommandHandler -> FloatingRateService: Wywołuje logikę aktualizacji
-FloatingRateService -> FloatingRateEntity: Pobiera istniejącą stopę procentową
-FloatingRateEntity -> Database: Zapytanie o FloatingRate
-Database --> FloatingRateEntity: Istniejąca FloatingRate
-FloatingRateEntity --> FloatingRateService: Istniejąca FloatingRate
-FloatingRateService -> FloatingRateService: Walidacja danych i tworzenie nowego FloatingRatePeriod
-FloatingRateService -> FloatingRatePeriodEntity: Tworzy nową encję FloatingRatePeriod z nową wartością i datą wejścia w życie
-FloatingRatePeriodEntity -> Database: Zapisz nową encję FloatingRatePeriod
-Database --> FloatingRatePeriodEntity: Potwierdzenie zapisu
-FloatingRateService -> FloatingRateEntity: Aktualizuje status poprzedniego FloatingRatePeriod (jeśli istnieje)
-FloatingRateEntity -> Database: Zaktualizuj poprzedni FloatingRatePeriod
-Database --> FloatingRateEntity: Potwierdzenie aktualizacji
-FloatingRateEntity --> FloatingRateService: Potwierdzenie
-FloatingRateService --> FloatingRatesCommandHandler: Wynik operacji
-FloatingRatesCommandHandler --> RatesController: Wynik operacji
-RatesController --> Admin: Odpowiedź HTTP 200 OK (lub błąd)
+Component(rate_api, "Floating Rates API", "Spring Web", "Rejestracja i aktualizacja stawek stóp bazowych przez menedżerów (np. /floatingrates)")
+Component(rate_service, "FloatingRateWritePlatformService", "Serwis Zapisujący", "Tworzy nowe okresy dla wskaźnika (FloatingRatePeriod). Utrzymuje ciągłość dat bez nakładania się (no-overlap rule).")
+Component(progressive_loan, "fineract-progressive-loan", "Pożyczki Zmienne", "Odpytuje moduł rat o obowiązującą stawkę WIBOR na dzień dzisiejszy w celu wygenerowania nowego harmonogramu")
+Component(savings_module, "fineract-savings", "Oszczędności", "Przelicza kapitalizację dzienną korzystając z pobranej dziennej stawki referencyjnej")
+
+SystemDb_Ext(db, "Relacyjna Baza Danych", "Model Tenanta")
+
+Rel(rate_api, rate_service, "HTTP PUT (nowa stawka: 6.5%)")
+Rel(rate_service, db, "Aktualizacja m_floating_rates / m_floating_rates_periods")
+Rel(progressive_loan, db, "Odczyt stawek na potrzeby symulacji / przeliczenia rat")
+Rel(savings_module, db, "Odczyt stawek dla kalkulacji Interest Posting")
 
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Zarządzanie stanem i baza danych
 
-Moduł `fineract-rates` jest modułem infrastrukturalnym, dostarczającym dane o stopach procentowych innym modułom:
-
-*   **fineract-core**: Wykorzystuje ogólne komponenty infrastrukturalne i narzędzia.
-*   **fineract-command**: Komendy do operacji na zmiennych stopach procentowych są przetwarzane przez ogólny mechanizm komend Fineract.
-*   **fineract-provider**: Udostępnia punkty końcowe API, które wywołują funkcjonalności modułu `fineract-rates`.
-*   **fineract-loan, fineract-savings**: Te moduły biznesowe odpytują `fineract-rates` o aktualne wartości zmiennych stóp procentowych w celu naliczania odsetek dla pożyczek i kont oszczędnościowych.
-
-## Zależności zewnętrzne i integracje
-
-*   **Baza Danych**: Główna zależność. Wszystkie definicje zmiennych stóp procentowych, ich historie i okresy obowiązywania są trwale przechowywane w relacyjnej bazie danych.
-*   **Spring Framework**: Wykorzystuje mechanizmy Spring do zarządzania transakcjami, wstrzykiwania zależności i konfiguracji.
-
-## Zarządzanie stanem i baza Danych
-
-Moduł `fineract-rates` zarządza stanem zmiennych stóp procentowych w bazie danych:
-
-*   **FloatingRate**: Przechowuje definicje zmiennych stóp procentowych (np. nazwa, czy jest aktywna).
-*   **FloatingRatePeriod**: Przechowuje historyczne i aktualne wartości zmiennych stóp procentowych wraz z datami ich wejścia w życie i wygaśnięcia. To pozwala na precyzyjne odtworzenie wartości stopy w dowolnym punkcie w czasie.
-
-Wszystkie te dane są modelowane jako encje JPA i trwale przechowywane w bazie danych, zapewniając spójność i możliwość śledzenia zmian w czasie.
+Moduł wprowadza poniższe słowniki do relacyjnej bazy danych dzierżawcy:
+*   `m_floating_rates`: Tabela nagłówkowa przechowująca m.in. nazwę stawki (np. "Krajowa Stopa Referencyjna NBP"), status aktywności (is_active) oraz bazę naliczania w dniach (np. czy dzielimy przez 360, czy 365 dni w roku).
+*   `m_floating_rates_periods`: Tablica relacyjna powiązana `1:N` przechowująca historię wartości stopy referencyjnej. Posiada klucz obcy do `m_floating_rates`, pole `from_date` określające dzień wejścia w życie nowej wartości procentowej oraz samo pole `interest_rate`.
+*   `m_rate`: Zwykła, historycznie starsza encja odsetkowa dla prostych konfiguracji marżowych, powiązana z określonym produktem.

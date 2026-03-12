@@ -1,85 +1,87 @@
-# Moduł: fineract-charge
+# Moduł Prowizji, Kar i Opłat (fineract-charge)
 
-## Przegląd
+[Powrót do dokumentacji głównej](README.md)
 
-Moduł `fineract-charge` w Apache Fineract jest odpowiedzialny za definiowanie, zarządzanie i aplikowanie różnego rodzaju opłat (charges) na produktach finansowych (takich jak pożyczki, konta oszczędnościowe) i transakcjach. Obejmuje to opłaty administracyjne, karne, manipulacyjne itp. Moduł ten zapewnia elastyczne mechanizmy konfiguracji opłat, ich naliczania w odpowiednich momentach cyklu życia produktu oraz prawidłowe księgowanie. Jest to kluczowy komponent do zarządzania przychodami z opłat oraz egzekwowania warunków umownych.
+## Opis
+Moduł `fineract-charge` to centralny rejestr konfiguracji kosztów niefinansowych, jakie instytucja bankowa nakłada na swoich klientów i ich produkty. Fineract nie "hardkoduje" swoich opłat – każda jedna opłata (np. prowizja za udzielenie kredytu, opłata członkowska, miesięczna opłata za utrzymanie karty płatniczej, karna oplata za spóźnienie raty) ma swój zdefiniowany szablon (Charge Template) w tym module.
+
+Instytucje mogą decydować czy opłaty te są stałymi kwotami (Flat fee), procentem od kapitału (np. 1% od kwoty pożyczki) czy zależą od kwoty zaległości (Penalty % of Overdue). Pobrane środki wpływają z opłat na specyficznie skonfigurowane w `fineract-accounting` konta zysków banku (Income).
 
 ## Kluczowe komponenty
 
-Moduł `fineract-charge` jest zorganizowany wokół pakietu `org.apache.fineract.portfolio.charge`, który zawiera następujące podpakietu:
+| Komponent | Odpowiedzialność biznesowa i techniczna |
+| :--- | :--- |
+| **`Charge` (Szablon)** | Encja definiująca rodzaj opłaty. Obejmuje takie atrybuty jak waluta (Currency), typ przypisania (Loan / Savings / Client), moment naliczenia (np. Disbursement, Specified Due Date, Installment Fee) oraz zasady wyliczania kwoty. |
+| **`ChargeCalculationType`** | Reguły matematyczne: Flat (płaska), % Kapitału (Percentage of Principal), % Zatwierdzonej Kwoty (Percentage of Approved Amount), itd. |
+| **`ChargeTimeType`** | Określa wyzwalacz: przy Wypłacie Środków z pożyczki, co miesiąc (Annual/Monthly Fee na koncie), Ręczne nakładanie (Manual). |
+| **`ChargeWritePlatformService`** | Zarządza dodawaniem i edycją tychże uniwersalnych szablonów prowizji, sprawdzając, czy mogą być one zaktualizowane (np. zabroniona jest edycja waluty na opłacie, która została już nałożona klientowi). |
 
-*   **org.apache.fineract.portfolio.charge.api**: Zawiera kontrolery REST lub interfejsy API do interakcji z modułem, umożliwiając tworzenie, aktualizowanie, usuwanie i aplikowanie opłat.
-*   **org.apache.fineract.portfolio.charge.domain**: Zawiera encje domenowe, takie jak `Charge` (definiująca opłatę, jej typ, sposób naliczania, kwotę/procent) i `ChargeDistribution` (sposób dystrybucji opłaty). Logika biznesowa do zarządzania tymi encjami znajduje się również tutaj.
-*   **org.apache.fineract.portfolio.charge.exception**: Niestandardowe wyjątki obsługujące błędy specyficzne dla zarządzania opłatami.
-*   **org.apache.fineract.portfolio.charge.handler**: Implementacje `CommandHandler`ów, które przetwarzają komendy związane z opłatami (np. `CreateChargeCommand`, `ApplyChargeCommand`).
-*   **org.apache.fineract.portfolio.charge.request**: Obiekty DTO (Data Transfer Objects) używane do przesyłania danych w żądaniach związanych z opłatami.
-*   **org.apache.fineract.portfolio.charge.serialization**: Obsługa serializacji i deserializacji danych opłat.
-*   **org.apache.fineract.portfolio.charge.service**: Serwisy biznesowe implementujące główną logikę zarządzania opłatami, w tym ich tworzenie, aktualizację, usuwanie oraz faktyczne naliczanie i aplikowanie na produkty finansowe.
+## Architektura modułu
 
-## Przepływ danych
-
-Przepływ danych w module `fineract-charge` obejmuje definiowanie opłat, a następnie ich aplikowanie na konkretne produkty lub transakcje finansowe.
-
-### Uproszczony przepływ definiowania i aplikowania opłaty:
+Moduł ten służy głównie jako słownik i kalkulator udostępniany do wykorzystania przez inne domeny (Pożyczki/Oszczędności).
 
 ```plantuml
 @startuml
-participant "Administrator (UI/API)" as Admin
-participant "Kontroler REST (fineract-provider/charge)" as ChargeController
-participant "CommandHandler (charge.handler)" as ChargeCommandHandler
-participant "ChargeService (charge.service)" as ChargeService
-participant "Charge (domain)" as ChargeEntity
-participant "Moduł Biznesowy (np. fineract-loan)" as BusinessModule
-participant "AccountingService (fineract-accounting)" as AccountingService
-participant "Baza Danych" as Database
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+title Model C4 - Zależności modułu fineract-charge
 
-Admin -> ChargeController: Żądanie utworzenia nowej definicji opłaty (POST /charges)
-ChargeController -> ChargeCommandHandler: Wysyła CreateChargeCommand
-ChargeCommandHandler -> ChargeService: Wywołuje logikę tworzenia
-ChargeService -> ChargeEntity: Tworzy nową encję Charge
-ChargeEntity -> Database: Zapisz definicję opłaty
-Database --> ChargeEntity: Potwierdzenie zapisu
-ChargeEntity --> ChargeService: Potwierdzenie
-ChargeService --> ChargeCommandHandler: Wynik operacji
-ChargeCommandHandler --> ChargeController: Wynik operacji
-ChargeController --> Admin: Odpowiedź HTTP 201 (z ID opłaty)
+Component(charge_api, "Charge REST API", "Spring Web", "Udostępnia końcówki do konfiguracji (np. /charges)")
+Component(charge_domain, "Charge Definitions", "Słownik Zasad", "Tworzenie i odczyt metadanych opłat")
+Component(loan_module, "fineract-loan", "Moduł Wypożyczania", "Kopiuje definicję opłaty w postaci nowej encji LoanCharge przyznanej konkretnej umowie")
+Component(savings_module, "fineract-savings", "Moduł Depozytów", "Kopiuje definicję opłaty w postaci SavingsAccountCharge potrącającej środki z salda konta")
+Component(accounting_module, "fineract-accounting", "Księgowość", "Wymaga zdefiniowania mappingów dla kont Przychodów (Income Account) przypisanych do opłaty")
 
-Admin -> BusinessModule: Operacja wymagająca opłaty (np. wypłata pożyczki)
-BusinessModule -> ChargeService: Aplikuj opłatę (np. ApplyChargeCommand lub bezpośrednie wywołanie serwisu)
-ChargeService -> ChargeEntity: Pobierz definicję opłaty
-ChargeEntity -> Database: Zapytanie o Charge
-Database --> ChargeEntity: Definicja Charge
-ChargeEntity --> ChargeService: Definicja Charge
-ChargeService -> BusinessModule: Zwraca szczegóły naliczonej opłaty
-BusinessModule -> AccountingService: Zaksięguj naliczoną opłatę
-AccountingService -> Database: Zapis transakcji księgowej
-Database --> AccountingService: Potwierdzenie
-AccountingService --> BusinessModule: Potwierdzenie
-BusinessModule -> BusinessModule: Kontynuuj operację biznesową
+SystemDb_Ext(db, "Baza Tenanta", "MySQL / PostgreSQL")
+
+Rel(charge_api, charge_domain, "Dodanie nowej opłaty (np. Karta Płatnicza 10 PLN)")
+Rel(loan_module, charge_domain, "Wnioskuje: Odczytaj kalkulację dla prowizji wejściowej 5%")
+Rel(savings_module, charge_domain, "Wnioskuje: Dodaj roczną opłatę utrzymaniową do konta z definicji")
+Rel(charge_domain, db, "Utrzymuje m_charge")
+
 @enduml
 ```
 
-## Zależności wewnętrzne
+## Przepływ danych (Nałożenie Kary)
 
-Moduł `fineract-charge` jest modułem wspierającym, który jest wykorzystywany przez główne moduły biznesowe Fineract:
+Diagram przedstawia interakcję powiązania Kary (Penalty) do spóźnionej raty za pomocą wykorzystania szablonów.
 
-*   **fineract-core**: Wykorzystuje ogólne komponenty infrastrukturalne i narzędzia.
-*   **fineract-command**: Komendy do operacji na opłatach są przetwarzane przez ogólny mechanizm komend Fineract.
-*   **fineract-provider**: Udostępnia punkty końcowe API, które wywołują funkcjonalności modułu `fineract-charge`.
-*   **fineract-loan, fineract-savings**: Te moduły biznesowe odwołują się do `fineract-charge` w celu definiowania, aplikowania i naliczania opłat związanych z pożyczkami i kontami oszczędnościowymi.
-*   **fineract-accounting**: Każda naliczona opłata musi zostać odpowiednio zaksięgowana, dlatego `fineract-charge` integruje się z modułem księgowości.
+```plantuml
+@startuml
+title Sekwencja - Naliczenie kary (Penalty) wg szablonu z fineract-charge
 
-## Zależności zewnętrzne i integracje
+participant "CloseOfBusiness Job\n(fineract-cob)" as cob
+participant "LoanAccountDomainService\n(fineract-loan)" as loan_svc
+participant "Charge (Szablon)\n(fineract-charge)" as charge_def
+participant "LoanCharge (Instancja)" as loan_charge
+participant "Database" as db
 
-*   **Baza Danych**: Główna zależność. Wszystkie definicje opłat, ich konfiguracje i rekordy naliczonych opłat są trwale przechowywane w relacyjnej bazie danych.
-*   **Spring Framework**: Wykorzystuje mechanizmy Spring do zarządzania transakcjami, wstrzykiwania zależności i konfiguracji.
+cob -> loan_svc: Nadszedł dzień wymagalności, opóźnienie (Arrears) na racie
+activate loan_svc
+loan_svc -> db: Pobierz powiązane z produktem opłaty typu "Overdue Penalty"
+db --> loan_svc: Zwraca [Charge: "1% of Overdue"]
 
-## Zarządzanie stanem i baza Danych
+loan_svc -> charge_def: Oblicz kwotę z zaległości 500 PLN za ten miesiąc
+activate charge_def
+charge_def --> loan_svc: Kwota Kary: 5 PLN
+deactivate charge_def
 
-Moduł `fineract-charge` zarządza stanem opłat w bazie danych:
+loan_svc -> loan_charge: Utwórz nową instancję (LoanCharge) o wartości 5 PLN
+loan_svc -> loan_svc: Przelicz ratę (Zwiększ kwotę wymaganą o 5 PLN z tytułu kary)
 
-*   **Definicje Opłat (Charge Definitions)**: Przechowuje szczegółowe informacje o każdym typie opłaty (np. nazwa, kwota/procent, sposób naliczania, waluta, okres obowiązywania).
-*   **Naliczone Opłaty (Applied Charges)**: Rejestruje każdą opłatę, która została naliczona na konkretny produkt finansowy lub transakcję, w tym jej kwotę, datę naliczenia i status (np. zapłacona, należna).
-*   **Konfiguracja Opłat dla Produktów**: Mapowania, które określają, które opłaty są domyślnie aplikowane do jakich produktów finansowych.
+loan_svc -> db: Zapisz LoanCharge z linkiem do tej instancji Loan
+loan_svc --> cob: Sukces
+deactivate loan_svc
+@enduml
+```
 
-Wszystkie te dane są modelowane jako encje JPA i trwale przechowywane w bazie danych, zapewniając spójność i audytowalność wszystkich transakcji związanych z opłatami.
+## Zależności wewnętrzne i Integracje
+
+*   **Fundament Kredytowania**: Koszty obsługi kredytowej niemal natychmiastowo klonują obiekt `Charge` do `LoanCharge` podczas przyznawania kredytu klientowi. Od tego momentu pożyczka wie, jaka była zasada policzenia tej kwoty i w jakiej racie (Installment) klient powinien ją pokryć.
+*   **Podatki (`fineract-tax`)**: Prowizje i Opłaty (Charge) posiadają na sobie flagę, która pozwala podpiąć je pod `TaxGroup`. To sprawia, że jeśli opłata wejściowa do banku wynosi 100 zł netto, Fineract może automatycznie obliczyć na niej 23% VATu dając 123 zł brutto i odpowiednio to zaksięgować.
+
+## Zarządzanie stanem i baza danych
+
+Najważniejsza struktura leży w tabeli głównej słownika:
+
+*   `m_charge`: Tabela posiadająca nazwę prowizji (name), kwotę nominalną lub wyjściową w procencie (`amount`), wskaźnik waluty (`currency_code`), wskaźnik typu zastosowania (`charge_applies_to_enum`), czy jest to kara narzutowa (`is_penalty`), mechanizm czasu nakładania opłaty (`charge_time_enum`). 
+*   Encja ta bezpośrednio podpinana jest jako Foreign Key (klucz obcy) np. w tabeli `m_loan_charge` modułu pożyczek.
