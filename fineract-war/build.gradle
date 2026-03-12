@@ -135,7 +135,6 @@ distributions {
             rename ('NOTICE_RELEASE', 'NOTICE')
 
             from "$rootDir/DISCLAIMER"
-            from "$rootDir/README.md"
 
             from "$rootDir/fineract-doc/build/docs/pdf/en/index.pdf"
             rename ('index.pdf', 'fineract-documentation.pdf')
