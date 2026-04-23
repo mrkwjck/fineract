@@ -18,7 +18,8 @@ System został podzielony na wysoce wyspecjalizowane podmoduły. Główny podzia
 **Główne Finanse (Portfel i Księgowość):**
 - **[Fineract Loan (Pożyczki)](fineract-loan.md)**: Kompleksowy cykl życia pożyczki – harmonogramy, naliczanie odsetek i kar, autoryzacja wypłat, spłaty.
 - **[Fineract Loan Origination](fineract-loan-origination.md)**: Proces składania i procesowania wniosków kredytowych, etap "przed" udzieleniem samej pożyczki (Decision Engine integration).
-- **[Fineract Progressive Loan](fineract-loan-origination.md)**: Nowoczesny standard pożyczek ze zmiennymi i elastycznymi harmonogramami.
+- **[Fineract Progressive Loan](fineract-progressive-loan.md)**: Nowoczesny standard pożyczek ze zmiennymi i elastycznymi harmonogramami.
+- **[Fineract Progressive Loan Schedule Generator](fineract-progressive-loan-embeddable-schedule-generator.md)**: Komponent osadzalny do generowania harmonogramów progresywnych.
 - **[Fineract Working Capital Loan](fineract-working-capital-loan.md)**: Obsługa płynności finansowej oraz linii kredytowych ze zmiennym kapitałem obrotowym dla MŚP.
 - **[Fineract Accounting (Księgowość)](fineract-accounting.md)**: Silnik księgowy z obsługą Księgi Głównej (GL), mapowaniem kont i księgowań podwójnych.
 - **[Fineract Savings (Oszczędności i Depozyty)](fineract-savings.md)**: Obsługa kont oszczędnościowych, lokat terminowych (Fixed Deposits) oraz powtarzalnych (Recurring Deposits).
@@ -44,9 +45,14 @@ System został podzielony na wysoce wyspecjalizowane podmoduły. Główny podzia
 - **[Fineract Portfolio Transfers (Zlecenia i Arkusze)](fineract-portfolio-transfers.md)**: Narzędzia do zleceń stałych, przelewów między rachunkami oraz zbiorczych arkuszy inkasowych dla terenowych spotkań mikrofinansowych (JLG).
 
 **Klienci SDK i Testowanie:**
-- **[Fineract Clients & Tests SDK](fineract-testing.md)**: Opis natywnych wygenerowanych klientów Java/Feign oraz zestawienia gigantycznej puli testów Rest Assured (Integracyjnych, E2E i zabezpieczeń OAuth2).
+- **[Fineract Client](fineract-client.md)**: Podstawowy natywny klient Java wygenerowany w oparciu o OpenAPI.
+- **[Fineract Client Feign](fineract-client-feign.md)**: Klient Java oparty na bibliotece Feign do łatwiejszej integracji w środowiskach chmurowych.
+- **[Fineract E2E Tests Core](fineract-e2e-tests-core.md)**: Podstawowe frameworki i definicje dla testów End-to-End.
+- **[Fineract E2E Tests Runner](fineract-e2e-tests-runner.md)**: Narzędzia do uruchamiania zestawów testów Rest Assured (Integracyjnych, E2E i zabezpieczeń OAuth2).
+- **[Fineract Clients & Tests SDK](fineract-testing.md)**: Dokumentacja zbiorcza dla puli testów.
 
 **Wdrożenie:**
+- **[Fineract WAR](fineract-war.md)**: Moduł służący do budowania paczki WAR (Web Application Archive) dla serwerów aplikacji.
 - **[Fineract Deployment (Infrastruktura)](fineract-deployment.md)**: Architektura wdrażania za pomocą wbudowanych manifestów K8s, Docker-Compose oraz budowy plików .war do kontenerów Cloud-Native.
 
 ## Architektura aplikacji (Model C4)
@@ -63,40 +69,47 @@ title Model C4 (Component level) - Apache Fineract
 
 Container(webapp, "Kanały Dostępowe (Web / Mobile)", "Angular / Flutter", "Aplikacje Front-End (np. Mifos X)")
 Container(api_gateway, "API Gateway / LB", "Nginx/Kong", "Punkt wejściowy REST API dla kanałów Fineract")
+System_Ext(external_sys, "Systemy Zewnętrzne", "Mobile Money / P2P", "Zewnętrzni operatorzy i inwestorzy")
 
 System_Boundary(fineract_core, "Apache Fineract (Core Banking)") {
-    Component(security, "fineract-security", "Spring Security, OAuth2", "Uwierzytelnianie, sprawdzanie uprawnień i dzierżawy (Multi-Tenancy)")
+    Component(security, "fineract-security\nfineract-core\nfineract-validation", "Infrastruktura", "Autoryzacja (OAuth2), Multi-Tenancy, rdzeń i walidacja.")
     
-    Component(command_handler, "fineract-command", "Command Bus", "Przechwytuje akcje zmieniające stan i rejestruje je dla pełnej historii audytowej.")
+    Component(command_handler, "fineract-command", "Command Bus", "Przechwytuje akcje zmieniające stan i rejestruje je (Audit).")
     
-    Component(portfolio_module, "fineract-provider (CRM)", "CRM Domain", "Zarządzanie klientami, pracownikami, powiązaniami.")
+    Component(portfolio_module, "fineract-provider (CRM)\nfineract-infrastructure\nfineract-document", "CRM & Wsparcie", "Klienci, pracownicy, dokumenty, kampanie i SMS.")
     
-    Component(loan_module, "fineract-loan\nfineract-progressive-loan", "Lending Domain", "Obsługa cyklu życia kredytów, harmonogramów i spłat.")
+    Component(loan_module, "fineract-loan\nfineract-(progressive|working-capital)-loan\nfineract-loan-origination", "Lending Domain", "Harmonogramy, cykl życia pożyczek, origination.")
     
-    Component(savings_module, "fineract-savings", "Deposit Domain", "Zarządzanie kontami oszczędnościowymi i depozytowymi, operacje wypłat, lokaty.")
+    Component(savings_module, "fineract-savings\nfineract-shareaccount", "Deposit Domain", "Konta oszczędnościowe, lokaty, udziały i dywidendy.")
     
-    Component(accounting_module, "fineract-accounting", "General Ledger", "Księga Główna, mapowania transakcji na podwójne wpisy księgowe.")
+    Component(accounting_module, "fineract-accounting\nfineract-tax", "General Ledger & Tax", "Księga Główna, mapowanie kont, wpisy księgowe i podatki.")
     
-    Component(charge_tax_module, "fineract-charge & tax", "Pricing Domain", "Obrabianie kar, opłat członkowskich, prowizji kredytowych oraz podatków zysków.")
+    Component(charge_module, "fineract-charge\nfineract-rates", "Pricing Domain", "Opłaty, prowizje, stopy procentowe.")
     
-    Component(batch_cob, "fineract-cob", "Spring Batch", "Aplikacje wsadowe wykonujące zadania końca dnia, blokady kont i odświeżanie.")
+    Component(batch_cob, "fineract-cob\nfineract-portfolio-transfers\nfineract-branch", "Operacje Wsadowe i Oddziały", "Zamykanie dnia (COB), zlecenia, limity kasjerskie.")
+
+    Component(integration_module, "fineract-interoperation\nfineract-investor\nfineract-mix\nfineract-report", "Integracja & Raporty", "Płatności mobilne, P2P Lending, raporty i XBRL.")
 
     Rel(api_gateway, security, "Żądania do autoryzacji")
     Rel(security, command_handler, "Modyfikacje do CQRS")
+    Rel(api_gateway, integration_module, "Zapytania o raporty i integracje")
     
     Rel(command_handler, loan_module, "Uruchamia serwisy biznesowe")
     Rel(command_handler, savings_module, "Uruchamia serwisy biznesowe")
     Rel(command_handler, portfolio_module, "Zmienia stan i powiązania Klienta")
     
-    Rel(charge_tax_module, loan_module, "Narzuca kwoty do spłaty raty")
-    Rel(loan_module, accounting_module, "Wyzwala księgowania zdarzeń kredytowych (np. spłata)")
-    Rel(savings_module, accounting_module, "Wyzwala księgowania zdarzeń kontowych (np. odsetki)")
+    Rel(charge_module, loan_module, "Narzuca kwoty i stopy")
+    Rel(loan_module, accounting_module, "Wyzwala księgowania kredytowe")
+    Rel(savings_module, accounting_module, "Wyzwala księgowania kontowe")
 }
 
-SystemDb_Ext(database, "Relacyjna Baza Danych (Tenant DB)", "MySQL / PostgreSQL", "Przechowuje stan dzierżawców oraz system bankowy")
-SystemQueue_Ext(event_broker, "Message Broker", "ActiveMQ / Kafka", "Służy do asynchronicznego wymieniania zdarzeń biznesowych (np. w webhookach)")
+SystemDb_Ext(database, "Relacyjna Baza Danych", "MySQL / PostgreSQL", "fineract-db (Migracje). Przechowuje stan dzierżawców.")
+SystemQueue_Ext(event_broker, "Message Broker", "ActiveMQ / Kafka", "Zdarzenia biznesowe (fineract-avro-schemas)")
+Component_Ext(clients_sdk, "Fineract Clients", "Java / Feign", "Klienci SDK (fineract-client, fineract-client-feign)")
 
-Rel(webapp, api_gateway, "Wywołania REST API", "JSON/HTTPS")
+Rel(webapp, clients_sdk, "Wykorzystuje SDK")
+Rel(clients_sdk, api_gateway, "Wywołania REST API", "JSON/HTTPS")
+Rel(external_sys, api_gateway, "Webhooks / Integracje")
 
 Rel(loan_module, database, "Odczyt/Zapis (JPA / JDBC)")
 Rel(savings_module, database, "Odczyt/Zapis (JPA / JDBC)")
@@ -105,6 +118,7 @@ Rel(batch_cob, database, "Masowy Odczyt/Zapis (JPA / JDBC)")
 
 Rel(loan_module, event_broker, "Emituje zdarzenia domenowe")
 Rel(savings_module, event_broker, "Emituje zdarzenia domenowe")
+Rel(integration_module, external_sys, "Płatności / Wymiana danych")
 
 @enduml
 ```
